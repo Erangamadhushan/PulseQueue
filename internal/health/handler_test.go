@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Erangamadhushan/pulsequeue/internal/httpx"
 )
 
 func TestHandler(t *testing.T) {
@@ -12,7 +14,7 @@ func TestHandler(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	// Call the handler directly
-	HealthHandler(rec, req)
+	Handler(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d",
@@ -30,6 +32,30 @@ func TestHandler(t *testing.T) {
 
 	if response.Status != "ok" {
 		t.Errorf("expected status %q, got %q", "ok", response.Status)
+	}
+}
+
+func TestHandlerRejectsUnsupportedMethod(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	Handler(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status 405, got %d", rec.Code)
+	}
+
+	if got := rec.Header().Get("Allow"); got != http.MethodGet {
+		t.Errorf("expected Allow: GET, got %q", got)
+	}
+
+	var response httpx.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+
+	if response.Error.Code != "method_not_allowed" {
+		t.Errorf("expected method_not_allowed, got %q", response.Error.Code)
 	}
 }
 
