@@ -1,8 +1,7 @@
 package health
 
 import (
-	"encoding/json"
-	"log/slog" // go's standard structured logging package.
+	"github.com/Erangamadhushan/pulsequeue/internal/httpx"
 	"net/http"
 )
 
@@ -10,15 +9,26 @@ type Response struct {
 	Status string `json:"status"`
 }
 
-func HealthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+func Handler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
 
-	response := Response{Status: "ok"}
+		httpx.WriteError(
+			w,
+			http.StatusMethodNotAllowed,
+			"method_not_allowed",
+			"Only GET requests are supported.",
+		)
+		return
+	}
 
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		slog.Error("Failed to encode health response", "error", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	if err := httpx.WriteJSON(
+		w,
+		http.StatusOK,
+		Response{Status: "ok"},
+	); err != nil {
+		// A response-write failure cannot reliably be repaired
+		// once the HTTP response has started.
 		return
 	}
 }

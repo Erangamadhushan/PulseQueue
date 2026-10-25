@@ -13,6 +13,7 @@ import (
 
 	"github.com/Erangamadhushan/pulsequeue/internal/config"
 	"github.com/Erangamadhushan/pulsequeue/internal/health"
+	"github.com/Erangamadhushan/pulsequeue/internal/httpx"
 )
 
 func main() {
@@ -35,15 +36,19 @@ func run() error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", health.HealthHandler)
+
+	mux.HandleFunc("/healthz", health.Handler)
+	mux.HandleFunc("/", httpx.NotFoundHandler)
+
+	handler := httpx.LoggingMiddleware(mux)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(
