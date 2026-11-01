@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pulsequeue-postgres
+    environment:
+      POSTGRES_USER: pulsequeue
+      POSTGRES_PASSWORD: pulsequeue
+      POSTGRES_DB: pulsequeue
+    ports:
+      - "5432:5432"
+    volumes:
+      - pulsequeue_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U pulsequeue -d pulsequeue"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pulsequeue_postgres_data:
