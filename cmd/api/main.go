@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Erangamadhushan/pulsequeue/internal/config"
+	"github.com/Erangamadhushan/pulsequeue/internal/database"
 	"github.com/Erangamadhushan/pulsequeue/internal/health"
 	"github.com/Erangamadhushan/pulsequeue/internal/httpx"
 )
@@ -30,14 +31,34 @@ func main() {
 }
 
 func run() error {
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	dbCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	db, err := database.NewPostgresPool(
+		dbCtx,
+		cfg.DatabaseURL,
+	)
+	if err != nil {
+		return fmt.Errorf("connect PostgreSQL: %w", err)
+	}
+	defer db.Close()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", health.Handler)
+	mux.Handle("/readyz", health.ReadinessHandler(db))
 	mux.HandleFunc("/", httpx.NotFoundHandler)
 
 	handler := httpx.LoggingMiddleware(mux)
@@ -51,31 +72,20 @@ func run() error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
-
-	defer stop()
-
 	serverErrors := make(chan error, 1)
 
 	go func() {
-		slog.Info("PulseQueue API starting",
-			"address", server.Addr,
-		)
+		slog.Info("PulseQueue API starting", "address", server.Addr)
 		serverErrors <- server.ListenAndServe()
 	}()
 
 	select {
 	case err := <-serverErrors:
 		if errors.Is(err, http.ErrServerClosed) {
-			slog.Info("PulseQueue API stopped gracefully")
 			return nil
 		}
-
 		return fmt.Errorf("server error: %w", err)
+
 	case <-ctx.Done():
 		slog.Info("PulseQueue API shutting down gracefully")
 	}

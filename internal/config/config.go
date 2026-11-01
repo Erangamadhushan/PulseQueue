@@ -8,28 +8,39 @@ import (
 )
 
 type Config struct {
-	Port string
+	Port        string
+	DatabaseURL string
 }
 
-func LoadConfig() (*Config, error) {
+func LoadConfig() (Config, error) {
 	port := strings.TrimSpace(os.Getenv("PULSEQUEUE_PORT"))
 
 	if port == "" {
-		port = "8080" // Default port if not set
+		port = "8080"
 	}
 
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return &Config{}, fmt.Errorf(
+		return Config{}, fmt.Errorf(
 			"invalid PULSEQUEUE_PORT %q: must be between 1 and 65535",
 			port,
 		)
 	}
 
-	return &Config{
-		Port: port,
-	}, nil
+	databaseURL := strings.TrimSpace(
+		os.Getenv("PULSEQUEUE_DATABASE_URL"),
+	)
 
+	if databaseURL == "" {
+		return Config{}, fmt.Errorf(
+			"PULSEQUEUE_DATABASE_URL is required",
+		)
+	}
+
+	return Config{
+		Port:        port,
+		DatabaseURL: databaseURL,
+	}, nil
 }
 
 // os.Getenv reads an environment variable.
