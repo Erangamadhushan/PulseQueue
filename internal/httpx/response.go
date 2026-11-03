@@ -15,11 +15,23 @@ type ErrorResponse struct {
 	Error APIError `json:"error"`
 }
 
-func WriteJSON(w http.ResponseWriter, status int, data any) error {
-	w.Header().Set("Content-Type", "application/json")
+func WriteJSON(
+	w http.ResponseWriter,
+	status int,
+	data any,
+) error {
+	w.Header().Set(
+		"Content-Type",
+		"application/json; charset=utf-8",
+	)
+
 	w.WriteHeader(status)
 
-	return json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func WriteError(

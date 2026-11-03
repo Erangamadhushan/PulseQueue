@@ -9,6 +9,31 @@ import (
 
 type JobStatus string
 
+
+type Job struct {
+	ID uuid.UUID
+
+	Queue string
+	Type  string
+
+	Payload json.RawMessage
+
+	Status JobStatus
+
+	Attempts    int
+	MaxAttempts int
+
+	RunAt time.Time
+
+	LastError *string
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+
+	StartedAt   *time.Time
+	CompletedAt *time.Time
+}
+
 const (
 	JobStatusPending   JobStatus = "pending"
 	JobStatusRunning   JobStatus = "running"
@@ -57,26 +82,24 @@ func (s JobStatus) CanTransitionTo(next JobStatus) bool {
 	}
 }
 
-type Job struct {
-	ID uuid.UUID
+func ToJobResponse(job Job) JobResponse {
+	return JobResponse{
+		ID:          job.ID.String(),
+		Queue:       job.Queue,
+		Type:        job.Type,
+		Payload:     job.Payload,
+		Status:      job.Status,
+		Attempts:    job.Attempts,
+		MaxAttempts: job.MaxAttempts,
+		RunAt:       job.RunAt,
 
-	Queue string
-	Type  string
+		LastError: job.LastError,
 
-	Payload json.RawMessage
+		CreatedAt: job.CreatedAt,
+		UpdatedAt: job.UpdatedAt,
 
-	Status JobStatus
+		StartedAt:   job.StartedAt,
+		CompletedAt: job.CompletedAt,
+	}
+}	
 
-	Attempts    int
-	MaxAttempts int
-
-	RunAt time.Time
-
-	LastError *string
-
-	CreatedAt time.Time
-	UpdatedAt time.Time
-
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-}
