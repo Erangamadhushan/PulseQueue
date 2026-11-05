@@ -1,4 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
 export class ApiError extends Error {
   constructor(
@@ -29,6 +30,9 @@ export async function apiRequest<T>(
   }
 
   headers.set("Accept", "application/json");
+  if (API_TOKEN) {
+    headers.set("Authorization", "Bearer " + API_TOKEN);
+  }
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,

@@ -80,7 +80,9 @@ func run() error {
 	})
 	mux.HandleFunc("/", httpx.NotFoundHandler)
 
-	handler := httpx.LoggingMiddleware(mux)
+	handler := httpx.LoggingMiddleware(
+		httpx.APIMiddleware(mux, cfg.APIToken, cfg.FrontendOrigin),
+	)
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.Host, cfg.Port),

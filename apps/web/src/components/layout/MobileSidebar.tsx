@@ -38,6 +38,7 @@ export function MobileSidebar({ open, onClose }: MobileSidebarProps) {
             <NavLink
               key={href}
               to={href}
+              end={href === "/"}
               onClick={onClose}
               className={({ isActive }) =>
                 `block rounded-md px-3 py-2 text-sm ${
