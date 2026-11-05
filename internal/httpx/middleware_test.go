@@ -39,8 +39,8 @@ func TestWriteError(t *testing.T) {
 		t.Fatalf("expected status 404, got %d", rec.Code)
 	}
 
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
-		t.Fatalf("expected application/json, got %q", got)
+	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("expected application/json; charset=utf-8, got %q", got)
 	}
 
 	var response ErrorResponse
