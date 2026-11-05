@@ -9,7 +9,6 @@ import (
 
 type JobStatus string
 
-
 type Job struct {
 	ID uuid.UUID
 
@@ -101,5 +100,4 @@ func ToJobResponse(job Job) JobResponse {
 		StartedAt:   job.StartedAt,
 		CompletedAt: job.CompletedAt,
 	}
-}	
-
+}
