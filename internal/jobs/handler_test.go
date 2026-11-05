@@ -257,6 +257,79 @@ func TestGetJobHandlerRejectsInvalidUUID(t *testing.T) {
 	assertErrorCode(t, recorder, "invalid_id")
 }
 
+func TestCancelJobHandlerSuccess(t *testing.T) {
+	id := uuid.New()
+	repository := &fakeRepository{
+		job:       Job{ID: id, Status: JobStatusPending},
+		cancelJob: Job{ID: id, Status: JobStatusCancelled},
+	}
+	handler := NewHandler(NewService(repository))
+	request := httptest.NewRequest(http.MethodPost, "/jobs/"+id.String()+"/cancel", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.CancelJob(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	var response JobResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != JobStatusCancelled {
+		t.Errorf("status = %q, want %q", response.Status, JobStatusCancelled)
+	}
+}
+
+func TestCancelJobHandlerErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		target     string
+		repository *fakeRepository
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "invalid UUID",
+			target:     "/jobs/not-a-uuid/cancel",
+			repository: &fakeRepository{},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_id",
+		},
+		{
+			name:       "missing job",
+			target:     "/jobs/" + uuid.NewString() + "/cancel",
+			repository: &fakeRepository{},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "job_not_found",
+		},
+		{
+			name:   "invalid state",
+			target: "/jobs/" + uuid.NewString() + "/cancel",
+			repository: &fakeRepository{
+				job: Job{Status: JobStatusRunning},
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "job_not_cancellable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHandler(NewService(tt.repository))
+			request := httptest.NewRequest(http.MethodPost, tt.target, nil)
+			recorder := httptest.NewRecorder()
+
+			handler.CancelJob(recorder, request)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+			assertErrorCode(t, recorder, tt.wantCode)
+		})
+	}
+}
+
 func TestListJobsHandlerParsesQuery(t *testing.T) {
 	repository := &fakeRepository{
 		listedJobs: []Job{{

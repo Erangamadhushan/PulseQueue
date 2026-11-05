@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -90,4 +92,33 @@ func (s *Service) CreateJob(
 	}
 
 	return createdJob, nil
+}
+
+
+func (s *Service) CancelJob(
+    ctx context.Context,
+    id uuid.UUID,
+) (Job, error) {
+
+	job, err := s.repository.GetByID(ctx, id)
+	if err != nil {
+		return Job{}, fmt.Errorf(
+			"get job by id: %w",
+			err,
+		)
+	}
+
+	if job.Status != JobStatusPending {
+		return Job{}, ErrJobNotPending
+	}
+
+	cancelledJob, err := s.repository.Cancel(ctx, id)
+	if err != nil {
+		return Job{}, fmt.Errorf(
+			"cancel job: %w",
+			err,
+		)
+	}
+
+	return cancelledJob, nil
 }

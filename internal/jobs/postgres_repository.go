@@ -168,6 +168,41 @@ func (r *PostgresRepository) GetByID(
 	return job, nil
 }
 
+func (r *PostgresRepository) Cancel(
+	ctx context.Context,
+	id uuid.UUID,
+) (Job, error) {
+	query := `
+		UPDATE jobs
+		SET status = $2, updated_at = NOW()
+		WHERE id = $1 AND status = $3
+		RETURNING ` + jobColumns
+
+	job, err := scanJob(r.pool.QueryRow(
+		ctx,
+		query,
+		id,
+		JobStatusCancelled,
+		JobStatusPending,
+	))
+	if err == nil {
+		return job, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, fmt.Errorf("cancel job: %w", err)
+	}
+
+	current, err := r.GetByID(ctx, id)
+	if err != nil {
+		return Job{}, err
+	}
+	if current.Status != JobStatusPending {
+		return Job{}, ErrJobNotCancellable
+	}
+
+	return Job{}, fmt.Errorf("cancel job: %w", ErrJobNotCancellable)
+}
+
 func (r *PostgresRepository) List(
 	ctx context.Context,
 	filter ListJobsFilter,

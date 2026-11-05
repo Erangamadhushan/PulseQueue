@@ -116,7 +116,7 @@ func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := uuid.Parse(r.URL.Path[len("/jobs/"):])
+	id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/jobs/"))
 	if err != nil {
 		WriteJSONError(
 			w,
@@ -173,6 +173,53 @@ func (h *Handler) ListJobs(w http.ResponseWriter, r *http.Request) {
 		w,
 		http.StatusOK,
 		toJobResponses(jobs),
+	); err != nil {
+		// Log response writing failure.
+		return
+	}
+}
+
+func (h *Handler) CancelJob(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+
+		WriteJSONError(
+			w,
+			http.StatusMethodNotAllowed,
+			"method_not_allowed",
+			"Only POST requests are supported.",
+		)
+		return
+	}
+
+	id, err := uuid.Parse(strings.TrimSuffix(
+		strings.TrimPrefix(r.URL.Path, "/jobs/"),
+		"/cancel",
+	))
+	if err != nil {
+		WriteJSONError(
+			w,
+			http.StatusBadRequest,
+			"invalid_id",
+			"The job ID is invalid.",
+		)
+		return
+	}
+
+	job, err := h.service.CancelJob(r.Context(), id)
+	if err != nil {
+		h.handleCreateError(w, err)
+		return
+	}
+
+	if err := httpx.WriteJSON(
+		w,
+		http.StatusOK,
+		ToJobResponse(job),
 	); err != nil {
 		// Log response writing failure.
 		return

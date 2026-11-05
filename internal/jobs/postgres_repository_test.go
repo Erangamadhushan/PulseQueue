@@ -136,6 +136,110 @@ func TestPostgresRepositoryGetByIDNotFound(
 	}
 }
 
+func TestPostgresRepositoryCancel(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue:       "cancel-" + uuid.NewString(),
+		Type:        "cancel_test",
+		Payload:     json.RawMessage(`{}`),
+		Status:      jobs.JobStatusPending,
+		MaxAttempts: 3,
+		RunAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	cancelled, err := repo.Cancel(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+	if cancelled.Status != jobs.JobStatusCancelled {
+		t.Fatalf("status = %q, want %q", cancelled.Status, jobs.JobStatusCancelled)
+	}
+}
+
+func TestPostgresRepositoryCancelNotFound(t *testing.T) {
+	repo := setupRepository(t)
+
+	_, err := repo.Cancel(context.Background(), uuid.New())
+	if !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Fatalf("expected ErrJobNotFound, got %v", err)
+	}
+}
+
+func TestPostgresRepositoryCancelRunningJob(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue:       "cancel-" + uuid.NewString(),
+		Type:        "cancel_test",
+		Payload:     json.RawMessage(`{}`),
+		Status:      jobs.JobStatusRunning,
+		MaxAttempts: 3,
+		RunAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	_, err = repo.Cancel(ctx, created.ID)
+	if !errors.Is(err, jobs.ErrJobNotCancellable) {
+		t.Fatalf("expected ErrJobNotCancellable, got %v", err)
+	}
+}
+
+func TestPostgresRepositoryConcurrentCancel(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue:       "cancel-" + uuid.NewString(),
+		Type:        "cancel_test",
+		Payload:     json.RawMessage(`{}`),
+		Status:      jobs.JobStatusPending,
+		MaxAttempts: 3,
+		RunAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, cancelErr := repo.Cancel(ctx, created.ID)
+			results <- cancelErr
+		}()
+	}
+
+	var success, rejected int
+	for range 2 {
+		err := <-results
+		switch err {
+		case nil:
+			success++
+		case jobs.ErrJobNotCancellable:
+			rejected++
+		default:
+			t.Errorf("unexpected cancellation error: %v", err)
+		}
+		if success != 1 || rejected != 1 {
+			t.Fatalf("successes = %d, rejections = %d, want 1 and 1", success, rejected)
+		}
+
+		final, err := repo.GetByID(ctx, created.ID)
+		if err != nil {
+			t.Fatalf("get final job: %v", err)
+		}
+		if final.Status != jobs.JobStatusCancelled {
+			t.Fatalf("final status = %q, want %q", final.Status, jobs.JobStatusCancelled)
+		}
+	}
+}
+
 func TestPostgresRepositoryListFiltersOrdersAndPaginates(t *testing.T) {
 	repo := setupRepository(t)
 	ctx := context.Background()

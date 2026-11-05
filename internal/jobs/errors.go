@@ -10,6 +10,7 @@ import (
 var (
 	ErrJobNotFound = errors.New("job not found")
 
+	// Validation errors
 	ErrInvalidJobType     = errors.New("invalid job type")
 	ErrInvalidJobPayload  = errors.New("invalid job payload")
 	ErrInvalidMaxAttempts = errors.New("invalid max attempts")
@@ -17,6 +18,10 @@ var (
 	ErrInvalidListOffset  = errors.New("invalid list offset")
 	ErrInvalidJobStatus   = errors.New("invalid job status")
 	ErrInvalidJobQueue    = errors.New("invalid job queue")
+	ErrJobNotPending      = errors.New("job is not pending")
+
+	// Job cancellation errors
+	ErrJobNotCancellable = errors.New("job cannot be cancelled")
 )
 
 type ErrorResponse struct {
@@ -82,6 +87,23 @@ func (h *Handler) handleCreateError(
 			http.StatusBadRequest,
 			"invalid_filter",
 			"the job list filter is invalid",
+		)
+
+	case errors.Is(err, ErrJobNotFound):
+		WriteJSONError(
+			w,
+			http.StatusNotFound,
+			"job_not_found",
+			"job not found",
+		)
+
+	case errors.Is(err, ErrJobNotPending),
+		errors.Is(err, ErrJobNotCancellable):
+		WriteJSONError(
+			w,
+			http.StatusConflict,
+			"job_not_cancellable",
+			"job cannot be cancelled",
 		)
 
 	default:

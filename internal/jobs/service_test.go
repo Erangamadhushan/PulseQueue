@@ -16,6 +16,10 @@ type fakeRepository struct {
 	listedJobs []Job
 	listErr    error
 	listFilter ListJobsFilter
+	job        Job
+	getErr     error
+	cancelJob  Job
+	cancelErr  error
 }
 
 func (f *fakeRepository) Create(
@@ -34,6 +38,12 @@ func (f *fakeRepository) GetByID(
 	_ context.Context,
 	_ uuid.UUID,
 ) (Job, error) {
+	if f.getErr != nil {
+		return Job{}, f.getErr
+	}
+	if f.job.ID != uuid.Nil || f.job.Status != "" {
+		return f.job, nil
+	}
 	return Job{}, ErrJobNotFound
 }
 
@@ -46,6 +56,16 @@ func (f *fakeRepository) List(
 		return nil, f.listErr
 	}
 	return f.listedJobs, nil
+}
+
+func (f *fakeRepository) Cancel(
+	_ context.Context,
+	_ uuid.UUID,
+) (Job, error) {
+	if f.cancelErr != nil {
+		return Job{}, f.cancelErr
+	}
+	return f.cancelJob, nil
 }
 
 func TestServiceCreateJobAppliesDefaults(
@@ -271,5 +291,29 @@ func TestServiceListJobsReturnsRepositoryError(t *testing.T) {
 	)
 	if !errors.Is(err, repositoryError) {
 		t.Fatalf("expected repository error, got %v", err)
+	}
+}
+
+func TestServiceCancelJob(t *testing.T) {
+	repositoryError := errors.New("database unavailable")
+	repository := &fakeRepository{getErr: repositoryError}
+	service := NewService(repository)
+
+	_, err := service.CancelJob(context.Background(), uuid.New())
+	if !errors.Is(err, repositoryError) {
+		t.Fatalf("expected repository error, got %v", err)
+	}
+}
+
+func TestServiceCancelJobPropagatesCancellationError(t *testing.T) {
+	repositoryError := errors.New("cancel failed")
+	repository := &fakeRepository{
+		job:       Job{ID: uuid.New(), Status: JobStatusPending},
+		cancelErr: repositoryError,
+	}
+
+	_, err := NewService(repository).CancelJob(context.Background(), repository.job.ID)
+	if !errors.Is(err, repositoryError) {
+		t.Fatalf("expected cancellation error, got %v", err)
 	}
 }
