@@ -203,6 +203,35 @@ func (r *PostgresRepository) Cancel(
 	return Job{}, fmt.Errorf("cancel job: %w", ErrJobNotCancellable)
 }
 
+func (r *PostgresRepository) Stats(
+	ctx context.Context,
+) (JobStats, error) {
+	const query = `
+		SELECT
+			COUNT(*),
+			COUNT(*) FILTER (WHERE status = 'pending'),
+			COUNT(*) FILTER (WHERE status = 'running'),
+			COUNT(*) FILTER (WHERE status = 'completed'),
+			COUNT(*) FILTER (WHERE status = 'failed'),
+			COUNT(*) FILTER (WHERE status = 'cancelled')
+		FROM jobs
+	`
+
+	var stats JobStats
+	if err := r.pool.QueryRow(ctx, query).Scan(
+		&stats.Total,
+		&stats.Pending,
+		&stats.Running,
+		&stats.Completed,
+		&stats.Failed,
+		&stats.Cancelled,
+	); err != nil {
+		return JobStats{}, fmt.Errorf("get job stats: %w", err)
+	}
+
+	return stats, nil
+}
+
 func (r *PostgresRepository) List(
 	ctx context.Context,
 	filter ListJobsFilter,
@@ -316,4 +345,13 @@ func (s *Service) ListJobs(
 	}
 
 	return jobs, nil
+}
+
+func (s *Service) GetStats(ctx context.Context) (JobStats, error) {
+	stats, err := s.repository.Stats(ctx)
+	if err != nil {
+		return JobStats{}, fmt.Errorf("get job stats: %w", err)
+	}
+
+	return stats, nil
 }

@@ -179,6 +179,24 @@ func (h *Handler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) Stats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		WriteJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET requests are supported.")
+		return
+	}
+
+	stats, err := h.service.GetStats(r.Context())
+	if err != nil {
+		h.handleCreateError(w, err)
+		return
+	}
+
+	if err := httpx.WriteJSON(w, http.StatusOK, stats); err != nil {
+		return
+	}
+}
+
 func (h *Handler) CancelJob(
 	w http.ResponseWriter,
 	r *http.Request,

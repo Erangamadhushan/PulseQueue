@@ -51,7 +51,8 @@ func (s *Service) CreateJob(
 		return Job{}, ErrInvalidJobType
 	}
 
-	if !json.Valid(input.Payload) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(input.Payload, &payload); err != nil || payload == nil {
 		return Job{}, ErrInvalidJobPayload
 	}
 
@@ -94,10 +95,9 @@ func (s *Service) CreateJob(
 	return createdJob, nil
 }
 
-
 func (s *Service) CancelJob(
-    ctx context.Context,
-    id uuid.UUID,
+	ctx context.Context,
+	id uuid.UUID,
 ) (Job, error) {
 
 	job, err := s.repository.GetByID(ctx, id)

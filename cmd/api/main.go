@@ -15,6 +15,7 @@ import (
 	"github.com/Erangamadhushan/pulsequeue/internal/database"
 	"github.com/Erangamadhushan/pulsequeue/internal/health"
 	"github.com/Erangamadhushan/pulsequeue/internal/httpx"
+	"github.com/Erangamadhushan/pulsequeue/internal/jobs"
 )
 
 func main() {
@@ -59,6 +60,23 @@ func run() error {
 
 	mux.HandleFunc("/healthz", health.Handler)
 	mux.Handle("/readyz", health.ReadinessHandler(db))
+	jobHandler := jobs.NewHandler(jobs.NewService(jobs.NewPostgresRepository(db)))
+	mux.HandleFunc("/stats", jobHandler.Stats)
+	mux.HandleFunc("/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			jobHandler.Create(w, r)
+			return
+		}
+		jobHandler.ListJobs(w, r)
+	})
+	mux.HandleFunc("/jobs/", func(w http.ResponseWriter, r *http.Request) {
+		if len(r.URL.Path) >= len("/cancel") &&
+			r.URL.Path[len(r.URL.Path)-len("/cancel"):] == "/cancel" {
+			jobHandler.CancelJob(w, r)
+			return
+		}
+		jobHandler.GetJob(w, r)
+	})
 	mux.HandleFunc("/", httpx.NotFoundHandler)
 
 	handler := httpx.LoggingMiddleware(mux)

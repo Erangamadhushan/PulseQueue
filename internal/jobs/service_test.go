@@ -20,6 +20,8 @@ type fakeRepository struct {
 	getErr     error
 	cancelJob  Job
 	cancelErr  error
+	stats      JobStats
+	statsErr   error
 }
 
 func (f *fakeRepository) Create(
@@ -66,6 +68,13 @@ func (f *fakeRepository) Cancel(
 		return Job{}, f.cancelErr
 	}
 	return f.cancelJob, nil
+}
+
+func (f *fakeRepository) Stats(_ context.Context) (JobStats, error) {
+	if f.statsErr != nil {
+		return JobStats{}, f.statsErr
+	}
+	return f.stats, nil
 }
 
 func TestServiceCreateJobAppliesDefaults(
@@ -238,6 +247,23 @@ func TestServiceCreateJobReturnsRepositoryError(
 	}
 }
 
+func TestServiceCreateJobRejectsNonObjectPayload(t *testing.T) {
+	for _, payload := range []string{`[]`, `"value"`, `null`} {
+		t.Run(payload, func(t *testing.T) {
+			_, err := NewService(&fakeRepository{}).CreateJob(
+				context.Background(),
+				CreateJobInput{
+					Type:    "test",
+					Payload: json.RawMessage(payload),
+				},
+			)
+			if !errors.Is(err, ErrInvalidJobPayload) {
+				t.Fatalf("error = %v, want %v", err, ErrInvalidJobPayload)
+			}
+		})
+	}
+}
+
 func TestServiceListJobsAppliesDefaultLimit(t *testing.T) {
 	repository := &fakeRepository{}
 	service := NewService(repository)
@@ -315,5 +341,15 @@ func TestServiceCancelJobPropagatesCancellationError(t *testing.T) {
 	_, err := NewService(repository).CancelJob(context.Background(), repository.job.ID)
 	if !errors.Is(err, repositoryError) {
 		t.Fatalf("expected cancellation error, got %v", err)
+	}
+}
+
+func TestServiceGetStatsPropagatesRepositoryError(t *testing.T) {
+	repositoryError := errors.New("database unavailable")
+	repository := &fakeRepository{statsErr: repositoryError}
+
+	_, err := NewService(repository).GetStats(context.Background())
+	if !errors.Is(err, repositoryError) {
+		t.Fatalf("expected repository error, got %v", err)
 	}
 }
