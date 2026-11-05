@@ -15,7 +15,8 @@ type Job struct {
 	Queue string
 	Type  string
 
-	Payload json.RawMessage
+	Payload        json.RawMessage
+	IdempotencyKey *string
 
 	Status JobStatus
 

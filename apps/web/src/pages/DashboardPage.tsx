@@ -28,31 +28,39 @@ export function DashboardPage() {
       <QuickActions />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {stats.isError ? (
+          <div className="sm:col-span-2 xl:col-span-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
+            Statistics are unavailable.{" "}
+            <button className="font-medium underline" onClick={() => void stats.refetch()}>
+              Retry
+            </button>
+          </div>
+        ) : null}
         <StatCard
           title="Total Jobs"
           value={stats.data?.total ?? "—"}
-          description={stats.isLoading ? "Loading statistics" : "All jobs"}
+          description={stats.isError ? "Unavailable" : stats.isLoading ? "Loading statistics" : "All jobs"}
           icon={Layers}
         />
 
         <StatCard
           title="Pending Jobs"
           value={stats.data?.pending ?? "—"}
-          description={stats.isLoading ? "Loading statistics" : "Waiting to run"}
+          description={stats.isError ? "Unavailable" : stats.isLoading ? "Loading statistics" : "Waiting to run"}
           icon={Clock3}
         />
 
         <StatCard
           title="Completed Jobs"
           value={stats.data?.completed ?? "—"}
-          description={stats.isLoading ? "Loading statistics" : "Successfully completed"}
+          description={stats.isError ? "Unavailable" : stats.isLoading ? "Loading statistics" : "Successfully completed"}
           icon={CheckCircle2}
         />
 
         <StatCard
           title="Failed Jobs"
           value={stats.data?.failed ?? "—"}
-          description={stats.isLoading ? "Loading statistics" : "Require attention"}
+          description={stats.isError ? "Unavailable" : stats.isLoading ? "Loading statistics" : "Require attention"}
           icon={XCircle}
         />
       </section>

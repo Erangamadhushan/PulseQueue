@@ -4,6 +4,7 @@ import "testing"
 
 func TestLoadDefaultsToPort8080(t *testing.T) {
 	t.Setenv("PULSEQUEUE_PORT", "")
+	t.Setenv("PULSEQUEUE_DATABASE_URL", "postgres://localhost/pulsequeue")
 
 	cfg, err := LoadConfig()
 	if err != nil {

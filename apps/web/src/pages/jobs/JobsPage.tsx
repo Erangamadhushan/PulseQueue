@@ -35,14 +35,10 @@ export function JobsPage() {
     offset: (page - 1) * limit,
     status,
     queue,
+    search: search.trim() || undefined,
   });
   const jobs = jobsQuery.data ?? [];
-  const filteredJobs = search
-    ? jobs.filter((job) =>
-        job.type.toLowerCase().includes(search.toLowerCase()) ||
-        job.id.toLowerCase().includes(search.toLowerCase()),
-      )
-    : jobs;
+  const filteredJobs = jobs;
   const hasNext = jobs.length === limit;
 
   const updateStatus = (nextStatus?: JobStatus) => {
@@ -90,7 +86,7 @@ export function JobsPage() {
           <JobTable jobs={filteredJobs} />
         )}
 
-        {!jobsQuery.isPending && !jobsQuery.isError && jobs.length > 0 && (
+        {!jobsQuery.isPending && !jobsQuery.isError && (jobs.length > 0 || page > 1) && (
           <JobPagination
             page={page}
             limit={limit}

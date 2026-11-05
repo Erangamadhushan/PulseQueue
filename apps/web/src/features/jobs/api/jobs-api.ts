@@ -19,8 +19,10 @@ export function getJob(id: string) {
 }
 
 export async function createJob(data: CreateJobRequest): Promise<Job> {
+  const idempotencyKey = crypto.randomUUID();
   return apiRequest<Job>("/jobs", {
     method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(data),
   });
 }

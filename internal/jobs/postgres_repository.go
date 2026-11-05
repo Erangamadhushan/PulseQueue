@@ -26,6 +26,7 @@ const jobColumns = `
 	queue,
 	type,
 	payload,
+	idempotency_key,
 	status,
 	attempts,
 	max_attempts,
@@ -55,6 +56,7 @@ func scanJob(
 		&job.Queue,
 		&job.Type,
 		&job.Payload,
+		&job.IdempotencyKey,
 		&job.Status,
 		&job.Attempts,
 		&job.MaxAttempts,
@@ -82,6 +84,7 @@ func (r *PostgresRepository) Create(
 			queue,
 			type,
 			payload,
+			idempotency_key,
 			status,
 			attempts,
 			max_attempts,
@@ -94,13 +97,17 @@ func (r *PostgresRepository) Create(
 			$4,
 			$5,
 			$6,
-			$7
+			$7,
+			$8
 		)
+		ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+		DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
 		RETURNING
 			id,
 			queue,
 			type,
 			payload,
+			idempotency_key,
 			status,
 			attempts,
 			max_attempts,
@@ -119,6 +126,7 @@ func (r *PostgresRepository) Create(
 			job.Queue,
 			job.Type,
 			job.Payload,
+			job.IdempotencyKey,
 			job.Status,
 			job.Attempts,
 			job.MaxAttempts,
@@ -250,6 +258,10 @@ func (r *PostgresRepository) List(
 	if filter.Queue != nil {
 		args = append(args, *filter.Queue)
 		conditions = append(conditions, fmt.Sprintf("queue = $%d", len(args)))
+	}
+	if filter.Search != nil {
+		args = append(args, "%"+*filter.Search+"%")
+		conditions = append(conditions, fmt.Sprintf("(id::text ILIKE $%d OR type ILIKE $%d)", len(args), len(args)))
 	}
 	if len(conditions) > 0 {
 		query.WriteString(" WHERE ")

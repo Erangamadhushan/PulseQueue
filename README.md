@@ -28,3 +28,10 @@ Build a reliable service that accepts jobs over HTTP, stores them, executes them
 - The frontend can request data from the Go API.
 - Configuration, logging, and errors have a consistent foundation.
 - You can explain the request lifecycle and the role of each main file.
+
+### Runtime configuration
+
+The API binds to `127.0.0.1` by default. Set `PULSEQUEUE_HOST=0.0.0.0`
+only when exposing it through an authenticated, protected network boundary.
+The frontend uses `/api` by default; set `VITE_API_BASE_URL` when the
+production frontend is hosted separately from the API.

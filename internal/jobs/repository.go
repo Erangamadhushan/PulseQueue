@@ -11,6 +11,7 @@ type ListJobsFilter struct {
 	Offset int
 	Status *JobStatus
 	Queue  *string
+	Search *string
 }
 
 type JobStats struct {

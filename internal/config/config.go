@@ -8,6 +8,7 @@ import (
 )
 
 type Config struct {
+	Host        string
 	Port        string
 	DatabaseURL string
 }
@@ -27,6 +28,11 @@ func LoadConfig() (Config, error) {
 		)
 	}
 
+	host := strings.TrimSpace(os.Getenv("PULSEQUEUE_HOST"))
+	if host == "" {
+		host = "127.0.0.1"
+	}
+
 	databaseURL := strings.TrimSpace(
 		os.Getenv("PULSEQUEUE_DATABASE_URL"),
 	)
@@ -38,6 +44,7 @@ func LoadConfig() (Config, error) {
 	}
 
 	return Config{
+		Host:        host,
 		Port:        port,
 		DatabaseURL: databaseURL,
 	}, nil

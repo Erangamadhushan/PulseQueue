@@ -18,11 +18,12 @@ const (
 )
 
 type CreateJobInput struct {
-	Queue       string
-	Type        string
-	Payload     json.RawMessage
-	MaxAttempts int
-	RunAt       *time.Time
+	Queue          string
+	Type           string
+	Payload        json.RawMessage
+	MaxAttempts    int
+	RunAt          *time.Time
+	IdempotencyKey string
 }
 
 type Service struct {
@@ -79,6 +80,9 @@ func (s *Service) CreateJob(
 		Attempts:    0,
 		MaxAttempts: maxAttempts,
 		RunAt:       runAt,
+	}
+	if input.IdempotencyKey != "" {
+		job.IdempotencyKey = &input.IdempotencyKey
 	}
 
 	createdJob, err := s.repository.Create(

@@ -82,7 +82,7 @@ func run() error {
 	handler := httpx.LoggingMiddleware(mux)
 
 	server := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              cfg.Host + ":" + cfg.Port,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
