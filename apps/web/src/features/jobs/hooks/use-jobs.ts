@@ -8,6 +8,7 @@ export function useJobs(params?: ListJobsParams) {
   return useQuery({
     queryKey: ["jobs", params],
     queryFn: () => listJobs(params),
+    refetchInterval: 15_000,
   });
 }
 

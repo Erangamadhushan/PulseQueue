@@ -79,11 +79,12 @@ func (h *Handler) Create(
 	job, err := h.service.CreateJob(
 		r.Context(),
 		CreateJobInput{
-			Queue:       request.Queue,
-			Type:        request.Type,
-			Payload:     request.Payload,
-			MaxAttempts: request.MaxAttempts,
-			RunAt:       request.RunAt,
+			Queue:          request.Queue,
+			Type:           request.Type,
+			Payload:        request.Payload,
+			MaxAttempts:    request.MaxAttempts,
+			RunAt:          request.RunAt,
+			IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key")),
 		},
 	)
 
@@ -271,6 +272,9 @@ func parseListJobsFilter(r *http.Request) (ListJobsFilter, error) {
 	if value := query.Get("queue"); value != "" {
 		queue := strings.TrimSpace(value)
 		filter.Queue = &queue
+	}
+	if value := strings.TrimSpace(query.Get("search")); value != "" {
+		filter.Search = &value
 	}
 
 	return filter, nil

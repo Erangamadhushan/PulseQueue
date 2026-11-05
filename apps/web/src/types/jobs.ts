@@ -26,6 +26,7 @@ export interface ListJobsParams {
   offset?: number;
   status?: JobStatus;
   queue?: string;
+  search?: string;
 }
 
 export interface CreateJobRequest {
