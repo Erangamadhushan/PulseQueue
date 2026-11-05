@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -169,16 +170,35 @@ func (r *PostgresRepository) GetByID(
 
 func (r *PostgresRepository) List(
 	ctx context.Context,
+	filter ListJobsFilter,
 ) ([]Job, error) {
-	query := `
-		SELECT ` + jobColumns + `
-		FROM jobs
-		ORDER BY created_at DESC
-	`
+	var query strings.Builder
+	query.WriteString("SELECT ")
+	query.WriteString(jobColumns)
+	query.WriteString(" FROM jobs")
+
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, 4)
+	if filter.Status != nil {
+		args = append(args, *filter.Status)
+		conditions = append(conditions, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if filter.Queue != nil {
+		args = append(args, *filter.Queue)
+		conditions = append(conditions, fmt.Sprintf("queue = $%d", len(args)))
+	}
+	if len(conditions) > 0 {
+		query.WriteString(" WHERE ")
+		query.WriteString(strings.Join(conditions, " AND "))
+	}
+	query.WriteString(" ORDER BY created_at DESC, id DESC")
+	args = append(args, filter.Limit, filter.Offset)
+	query.WriteString(fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)-1, len(args)))
 
 	rows, err := r.pool.Query(
 		ctx,
-		query,
+		query.String(),
+		args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -205,6 +225,57 @@ func (r *PostgresRepository) List(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf(
 			"iterate jobs: %w",
+			err,
+		)
+	}
+
+	return jobs, nil
+}
+
+func (s *Service) GetJob(
+	ctx context.Context,
+	id uuid.UUID,
+) (Job, error) {
+
+	job, err := s.repository.GetByID(ctx, id)
+	if err != nil {
+		return Job{}, fmt.Errorf(
+			"get job: %w",
+			err,
+		)
+	}
+
+	return job, nil
+}
+
+func (s *Service) ListJobs(
+	ctx context.Context,
+	filter ListJobsFilter,
+) ([]Job, error) {
+	if filter.Limit == 0 {
+		filter.Limit = DefaultListLimit
+	}
+	if filter.Limit < 1 || filter.Limit > MaxListLimit {
+		return nil, ErrInvalidListLimit
+	}
+	if filter.Offset < 0 {
+		return nil, ErrInvalidListOffset
+	}
+	if filter.Status != nil && !filter.Status.IsValid() {
+		return nil, ErrInvalidJobStatus
+	}
+	if filter.Queue != nil {
+		queue := strings.TrimSpace(*filter.Queue)
+		if queue == "" {
+			return nil, ErrInvalidJobQueue
+		}
+		filter.Queue = &queue
+	}
+
+	jobs, err := s.repository.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list jobs: %w",
 			err,
 		)
 	}

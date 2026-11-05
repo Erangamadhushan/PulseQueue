@@ -135,3 +135,49 @@ func TestPostgresRepositoryGetByIDNotFound(
 		)
 	}
 }
+
+func TestPostgresRepositoryListFiltersOrdersAndPaginates(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	queue := "integration-" + uuid.NewString()
+
+	create := func(status jobs.JobStatus) jobs.Job {
+		job, err := repo.Create(ctx, jobs.Job{
+			Queue:       queue,
+			Type:        "list_test",
+			Payload:     json.RawMessage(`{}`),
+			Status:      status,
+			MaxAttempts: 3,
+			RunAt:       time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+		return job
+	}
+
+	first := create(jobs.JobStatusPending)
+	second := create(jobs.JobStatusPending)
+	create(jobs.JobStatusCompleted)
+
+	status := jobs.JobStatusPending
+	queueFilter := queue
+	got, err := repo.List(ctx, jobs.ListJobsFilter{
+		Limit:  1,
+		Offset: 1,
+		Status: &status,
+		Queue:  &queueFilter,
+	})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d jobs, want 1", len(got))
+	}
+	if got[0].ID != first.ID {
+		t.Fatalf("job ID = %v, want %v after descending pagination", got[0].ID, first.ID)
+	}
+	if second.CreatedAt.Before(first.CreatedAt) {
+		t.Fatalf("created timestamps are not ordered for test: %v before %v", second.CreatedAt, first.CreatedAt)
+	}
+}

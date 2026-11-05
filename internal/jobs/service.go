@@ -11,6 +11,8 @@ import (
 const (
 	DefaultQueue       = "default"
 	DefaultMaxAttempts = 3
+	DefaultListLimit   = 10
+	MaxListLimit       = 100
 )
 
 type CreateJobInput struct {
@@ -89,4 +91,3 @@ func (s *Service) CreateJob(
 
 	return createdJob, nil
 }
-

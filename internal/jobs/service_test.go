@@ -13,6 +13,9 @@ import (
 type fakeRepository struct {
 	createdJob Job
 	createErr  error
+	listedJobs []Job
+	listErr    error
+	listFilter ListJobsFilter
 }
 
 func (f *fakeRepository) Create(
@@ -36,8 +39,13 @@ func (f *fakeRepository) GetByID(
 
 func (f *fakeRepository) List(
 	_ context.Context,
+	filter ListJobsFilter,
 ) ([]Job, error) {
-	return nil, nil
+	f.listFilter = filter
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.listedJobs, nil
 }
 
 func TestServiceCreateJobAppliesDefaults(
@@ -207,5 +215,61 @@ func TestServiceCreateJobReturnsRepositoryError(
 			"expected repository error, got %v",
 			err,
 		)
+	}
+}
+
+func TestServiceListJobsAppliesDefaultLimit(t *testing.T) {
+	repository := &fakeRepository{}
+	service := NewService(repository)
+
+	_, err := service.ListJobs(context.Background(), ListJobsFilter{})
+	if err != nil {
+		t.Fatalf("ListJobs() error = %v", err)
+	}
+	if repository.listFilter.Limit != DefaultListLimit {
+		t.Errorf("Limit = %d, want %d", repository.listFilter.Limit, DefaultListLimit)
+	}
+	if repository.listFilter.Offset != 0 {
+		t.Errorf("Offset = %d, want 0", repository.listFilter.Offset)
+	}
+}
+
+func TestServiceListJobsRejectsInvalidFilters(t *testing.T) {
+	status := JobStatus("unknown")
+	queue := " "
+	tests := []struct {
+		name   string
+		filter ListJobsFilter
+		want   error
+	}{
+		{"zero limit is defaulted", ListJobsFilter{Limit: 0}, nil},
+		{"negative limit", ListJobsFilter{Limit: -1}, ErrInvalidListLimit},
+		{"limit above maximum", ListJobsFilter{Limit: MaxListLimit + 1}, ErrInvalidListLimit},
+		{"negative offset", ListJobsFilter{Offset: -1}, ErrInvalidListOffset},
+		{"invalid status", ListJobsFilter{Status: &status}, ErrInvalidJobStatus},
+		{"empty queue", ListJobsFilter{Queue: &queue}, ErrInvalidJobQueue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := &fakeRepository{}
+			_, err := NewService(repository).ListJobs(context.Background(), tt.filter)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestServiceListJobsReturnsRepositoryError(t *testing.T) {
+	repositoryError := errors.New("database unavailable")
+	repository := &fakeRepository{listErr: repositoryError}
+
+	_, err := NewService(repository).ListJobs(
+		context.Background(),
+		ListJobsFilter{Limit: 1},
+	)
+	if !errors.Is(err, repositoryError) {
+		t.Fatalf("expected repository error, got %v", err)
 	}
 }

@@ -3,9 +3,12 @@ package jobs
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Erangamadhushan/pulsequeue/internal/httpx"
+	"github.com/google/uuid"
 )
 
 type CreateJobRequest struct {
@@ -97,4 +100,121 @@ func (h *Handler) Create(
 		// Log response writing failure.
 		return
 	}
+}
+
+func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
+
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+
+		WriteJSONError(
+			w,
+			http.StatusMethodNotAllowed,
+			"method_not_allowed",
+			"Only GET requests are supported.",
+		)
+		return
+	}
+
+	id, err := uuid.Parse(r.URL.Path[len("/jobs/"):])
+	if err != nil {
+		WriteJSONError(
+			w,
+			http.StatusBadRequest,
+			"invalid_id",
+			"The job ID is invalid.",
+		)
+		return
+	}
+
+	job, err := h.service.GetJob(r.Context(), id)
+	if err != nil {
+		h.handleCreateError(w, err)
+		return
+	}
+
+	if err := httpx.WriteJSON(
+		w,
+		http.StatusOK,
+		ToJobResponse(job),
+	); err != nil {
+		// Log response writing failure.
+		return
+	}
+}
+
+func (h *Handler) ListJobs(w http.ResponseWriter, r *http.Request) {
+
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+
+		WriteJSONError(
+			w,
+			http.StatusMethodNotAllowed,
+			"method_not_allowed",
+			"Only GET requests are supported.",
+		)
+		return
+	}
+
+	filter, err := parseListJobsFilter(r)
+	if err != nil {
+		h.handleCreateError(w, err)
+		return
+	}
+
+	jobs, err := h.service.ListJobs(r.Context(), filter)
+	if err != nil {
+		h.handleCreateError(w, err)
+		return
+	}
+
+	if err := httpx.WriteJSON(
+		w,
+		http.StatusOK,
+		toJobResponses(jobs),
+	); err != nil {
+		// Log response writing failure.
+		return
+	}
+}
+
+func parseListJobsFilter(r *http.Request) (ListJobsFilter, error) {
+	filter := ListJobsFilter{
+		Limit: DefaultListLimit,
+	}
+	query := r.URL.Query()
+
+	if value := query.Get("limit"); value != "" {
+		limit, err := strconv.Atoi(value)
+		if err != nil {
+			return ListJobsFilter{}, ErrInvalidListLimit
+		}
+		filter.Limit = limit
+	}
+	if value := query.Get("offset"); value != "" {
+		offset, err := strconv.Atoi(value)
+		if err != nil {
+			return ListJobsFilter{}, ErrInvalidListOffset
+		}
+		filter.Offset = offset
+	}
+	if value := query.Get("status"); value != "" {
+		status := JobStatus(value)
+		filter.Status = &status
+	}
+	if value := query.Get("queue"); value != "" {
+		queue := strings.TrimSpace(value)
+		filter.Queue = &queue
+	}
+
+	return filter, nil
+}
+
+func toJobResponses(jobs []Job) []JobResponse {
+	responses := make([]JobResponse, 0, len(jobs))
+	for _, job := range jobs {
+		responses = append(responses, ToJobResponse(job))
+	}
+	return responses
 }

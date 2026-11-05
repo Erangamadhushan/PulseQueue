@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestCreateJobHandlerSuccess(t *testing.T) {
@@ -242,6 +244,85 @@ func TestCreateJobHandlerReturnsRepositoryError(t *testing.T) {
 	)
 }
 
+func TestGetJobHandlerRejectsInvalidUUID(t *testing.T) {
+	handler := NewHandler(nil)
+	request := httptest.NewRequest(http.MethodGet, "/jobs/not-a-uuid", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.GetJob(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	assertErrorCode(t, recorder, "invalid_id")
+}
+
+func TestListJobsHandlerParsesQuery(t *testing.T) {
+	repository := &fakeRepository{
+		listedJobs: []Job{{
+			ID:      uuid.New(),
+			Queue:   "emails",
+			Type:    "send_email",
+			Payload: json.RawMessage(`{}`),
+			Status:  JobStatusPending,
+			RunAt:   time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC),
+		}},
+	}
+	handler := NewHandler(NewService(repository))
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/jobs?limit=2&offset=1&status=pending&queue=%20emails%20",
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+
+	handler.ListJobs(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if repository.listFilter.Limit != 2 || repository.listFilter.Offset != 1 {
+		t.Fatalf("filter pagination = %+v, want limit 2 offset 1", repository.listFilter)
+	}
+	if repository.listFilter.Status == nil || *repository.listFilter.Status != JobStatusPending {
+		t.Fatalf("status filter = %v, want pending", repository.listFilter.Status)
+	}
+	if repository.listFilter.Queue == nil || *repository.listFilter.Queue != "emails" {
+		t.Fatalf("queue filter = %v, want emails", repository.listFilter.Queue)
+	}
+
+	var response []JobResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response) != 1 || response[0].ID != repository.listedJobs[0].ID.String() {
+		t.Fatalf("response = %+v, want one mapped job", response)
+	}
+}
+
+func TestListJobsHandlerRejectsInvalidQuery(t *testing.T) {
+	tests := []string{
+		"/jobs?limit=not-a-number",
+		"/jobs?offset=-1",
+		"/jobs?status=unknown",
+		"/jobs?queue=%20",
+	}
+
+	for _, target := range tests {
+		t.Run(target, func(t *testing.T) {
+			handler := NewHandler(NewService(&fakeRepository{}))
+			request := httptest.NewRequest(http.MethodGet, target, nil)
+			recorder := httptest.NewRecorder()
+
+			handler.ListJobs(recorder, request)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+			}
+			assertErrorCode(t, recorder, "invalid_filter")
+		})
+	}
+}
 
 func newCreateJobRequest(body string) *http.Request {
 	request := httptest.NewRequest(
