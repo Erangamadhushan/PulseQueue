@@ -28,3 +28,16 @@ Build a reliable service that accepts jobs over HTTP, stores them, executes them
 - The frontend can request data from the Go API.
 - Configuration, logging, and errors have a consistent foundation.
 - You can explain the request lifecycle and the role of each main file.
+
+### Runtime configuration
+
+The API binds to `127.0.0.1` by default. A non-loopback bind requires
+`PULSEQUEUE_API_TOKEN`; clients must send it in the `Authorization` header.
+Configure `PULSEQUEUE_FRONTEND_ORIGIN` with the exact frontend origin (for
+example `https://dashboard.example.com`) when the frontend is hosted
+separately from the API. Health endpoints remain public, while job and
+statistics routes require authentication.
+
+The frontend uses `/api` by default; set `VITE_API_BASE_URL` for a separately
+hosted API and set `VITE_API_TOKEN` to the same API token when authentication
+is enabled.

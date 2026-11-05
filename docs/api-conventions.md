@@ -12,6 +12,20 @@ Local development: http://localhost:8080
 Return an appropriate HTTP 2xx status and a documented
 JSON response where a response body is expected.
 
+## Aggregate statistics
+`GET /stats` returns aggregate job counts for the dashboard:
+
+```json
+{
+  "total": 0,
+  "pending": 0,
+  "running": 0,
+  "completed": 0,
+  "failed": 0,
+  "cancelled": 0
+}
+```
+
 ## Error responses
 All API errors use the following structure:
 

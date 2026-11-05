@@ -67,7 +67,7 @@ func (h *Handler) handleCreateError(
 			w,
 			http.StatusBadRequest,
 			"invalid_job_payload",
-			"payload must be valid JSON",
+			"payload must be a JSON object",
 		)
 
 	case errors.Is(err, ErrInvalidMaxAttempts):

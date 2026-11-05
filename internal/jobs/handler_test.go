@@ -281,6 +281,28 @@ func TestCancelJobHandlerSuccess(t *testing.T) {
 	}
 }
 
+func TestStatsHandlerSuccess(t *testing.T) {
+	repository := &fakeRepository{stats: JobStats{
+		Total: 10, Pending: 2, Running: 1, Completed: 5, Failed: 1, Cancelled: 1,
+	}}
+	handler := NewHandler(NewService(repository))
+	request := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.Stats(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	var response JobStats
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode stats response: %v", err)
+	}
+	if response != repository.stats {
+		t.Fatalf("response = %+v, want %+v", response, repository.stats)
+	}
+}
+
 func TestCancelJobHandlerErrors(t *testing.T) {
 	tests := []struct {
 		name       string

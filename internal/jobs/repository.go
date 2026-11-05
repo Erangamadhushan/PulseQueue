@@ -11,6 +11,16 @@ type ListJobsFilter struct {
 	Offset int
 	Status *JobStatus
 	Queue  *string
+	Search *string
+}
+
+type JobStats struct {
+	Total     int `json:"total"`
+	Pending   int `json:"pending"`
+	Running   int `json:"running"`
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+	Cancelled int `json:"cancelled"`
 }
 
 type Repository interface {
@@ -18,4 +28,5 @@ type Repository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (Job, error)
 	List(ctx context.Context, filter ListJobsFilter) ([]Job, error)
 	Cancel(ctx context.Context, id uuid.UUID) (Job, error)
+	Stats(ctx context.Context) (JobStats, error)
 }

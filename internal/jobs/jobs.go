@@ -9,14 +9,14 @@ import (
 
 type JobStatus string
 
-
 type Job struct {
 	ID uuid.UUID
 
 	Queue string
 	Type  string
 
-	Payload json.RawMessage
+	Payload        json.RawMessage
+	IdempotencyKey *string
 
 	Status JobStatus
 
@@ -101,5 +101,4 @@ func ToJobResponse(job Job) JobResponse {
 		StartedAt:   job.StartedAt,
 		CompletedAt: job.CompletedAt,
 	}
-}	
-
+}

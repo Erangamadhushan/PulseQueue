@@ -18,11 +18,12 @@ const (
 )
 
 type CreateJobInput struct {
-	Queue       string
-	Type        string
-	Payload     json.RawMessage
-	MaxAttempts int
-	RunAt       *time.Time
+	Queue          string
+	Type           string
+	Payload        json.RawMessage
+	MaxAttempts    int
+	RunAt          *time.Time
+	IdempotencyKey string
 }
 
 type Service struct {
@@ -51,7 +52,8 @@ func (s *Service) CreateJob(
 		return Job{}, ErrInvalidJobType
 	}
 
-	if !json.Valid(input.Payload) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(input.Payload, &payload); err != nil || payload == nil {
 		return Job{}, ErrInvalidJobPayload
 	}
 
@@ -79,6 +81,9 @@ func (s *Service) CreateJob(
 		MaxAttempts: maxAttempts,
 		RunAt:       runAt,
 	}
+	if input.IdempotencyKey != "" {
+		job.IdempotencyKey = &input.IdempotencyKey
+	}
 
 	createdJob, err := s.repository.Create(
 		ctx,
@@ -94,10 +99,9 @@ func (s *Service) CreateJob(
 	return createdJob, nil
 }
 
-
 func (s *Service) CancelJob(
-    ctx context.Context,
-    id uuid.UUID,
+	ctx context.Context,
+	id uuid.UUID,
 ) (Job, error) {
 
 	job, err := s.repository.GetByID(ctx, id)

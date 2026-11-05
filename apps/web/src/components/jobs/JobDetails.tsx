@@ -1,0 +1,6 @@
+import type { Job } from "@/types/jobs";
+import { JobStatusBadge } from "./JobStatusBadge";
+
+export function JobDetails({ job }: { job: Job }) {
+  return <div className="grid gap-6 lg:grid-cols-[1fr_320px]"><section className="rounded-xl border bg-card p-5 shadow-sm"><div className="flex items-start justify-between gap-4"><div><p className="text-xl font-semibold">{job.type}</p><p className="mt-1 font-mono text-xs text-muted-foreground">{job.id}</p></div><JobStatusBadge status={job.status} /></div><h2 className="mt-8 font-semibold">Payload</h2><pre className="mt-3 overflow-x-auto rounded-lg bg-muted p-4 text-sm">{JSON.stringify(job.payload, null, 2)}</pre></section><section className="rounded-xl border bg-card p-5 shadow-sm"><h2 className="font-semibold">Execution</h2><dl className="mt-5 space-y-4 text-sm"><div className="flex justify-between"><dt className="text-muted-foreground">Queue</dt><dd>{job.queue}</dd></div><div className="flex justify-between"><dt className="text-muted-foreground">Attempts</dt><dd>{job.attempts} / {job.max_attempts}</dd></div><div className="flex justify-between"><dt className="text-muted-foreground">Created</dt><dd>{new Date(job.created_at).toLocaleString()}</dd></div></dl></section></div>;
+}
