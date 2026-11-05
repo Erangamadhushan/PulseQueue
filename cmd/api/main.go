@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog" // go's standard structured logging package.
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -82,7 +83,7 @@ func run() error {
 	handler := httpx.LoggingMiddleware(mux)
 
 	server := &http.Server{
-		Addr:              cfg.Host + ":" + cfg.Port,
+		Addr:              net.JoinHostPort(cfg.Host, cfg.Port),
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

@@ -52,11 +52,13 @@ jobs:
           until pg_isready -h localhost -U pulsequeue -d pulsequeue; do
             sleep 1
           done
-          PGPASSWORD=pulsequeue psql \
-            --host localhost \
-            --username pulsequeue \
-            --dbname pulsequeue \
-            --file migrations/000001_create_jobs.up.sql
+          for migration in migrations/*.up.sql; do
+            PGPASSWORD=pulsequeue psql \
+              --host localhost \
+              --username pulsequeue \
+              --dbname pulsequeue \
+              --file "$migration"
+          done
 
       - name: Verify Go formatting
         shell: bash
