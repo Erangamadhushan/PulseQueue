@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,7 +38,8 @@ const jobColumns = `
 	completed_at,
 	worker_id,
 	locked_at,
-	lease_expires_at
+	lease_expires_at,
+	claim_token
 `
 
 func NewPostgresRepository(
@@ -73,6 +73,7 @@ func scanJob(
 		&job.WorkerID,
 		&job.LockedAt,
 		&job.LeaseExpiresAt,
+		&job.ClaimToken,
 	)
 
 	if err != nil {
@@ -126,7 +127,8 @@ func (r *PostgresRepository) Create(
 			completed_at,
 			worker_id,
 			locked_at,
-			lease_expires_at
+			lease_expires_at,
+			claim_token
 	`
 
 	createdJob, err := scanJob(
@@ -249,38 +251,39 @@ func (r *PostgresRepository) Stats(
 	return stats, nil
 }
 
-func (r *PostgresRepository) Claim(
+func (r *PostgresRepository) ClaimNext(
 	ctx context.Context,
-	workerID string,
-	leaseDuration time.Duration,
-) (Job, error) {
-	if strings.TrimSpace(workerID) == "" {
-		return Job{}, errors.New("worker ID is required")
-	}
-	if leaseDuration <= 0 {
-		return Job{}, errors.New("lease duration must be positive")
+	input ClaimJobInput,
+) (*ClaimResult, error) {
+	queues, err := validateClaimInput(input)
+	if err != nil {
+		return nil, err
 	}
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return Job{}, fmt.Errorf("begin claim transaction: %w", err)
+		return nil, fmt.Errorf("begin claim transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	claimToken := uuid.New()
 	const query = `
 			SELECT ` + jobColumns + `
 			FROM jobs
-			WHERE status = $1 AND run_at <= NOW() AND attempts < max_attempts
-			ORDER BY created_at ASC, id ASC
+			WHERE status = $1
+				AND run_at <= NOW()
+				AND attempts < max_attempts
+				AND queue = ANY($2)
+			ORDER BY run_at ASC, created_at ASC, id ASC
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		`
-	job, err := scanJob(tx.QueryRow(ctx, query, JobStatusPending))
+	job, err := scanJob(tx.QueryRow(ctx, query, JobStatusPending, queues))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Job{}, ErrNoJobs
+			return nil, nil
 		}
-		return Job{}, fmt.Errorf("select job to claim: %w", err)
+		return nil, fmt.Errorf("select job to claim: %w", err)
 	}
 
 	claimed, err := scanJob(tx.QueryRow(ctx, `
@@ -290,49 +293,76 @@ func (r *PostgresRepository) Claim(
 				worker_id = $3,
 				locked_at = NOW(),
 				lease_expires_at = NOW() + $4::interval,
+				claim_token = $5,
 				started_at = COALESCE(started_at, NOW()),
 				updated_at = NOW()
 			WHERE id = $1
 			RETURNING `+jobColumns,
 		job.ID,
 		JobStatusRunning,
-		workerID,
-		leaseDuration.String(),
+		input.WorkerID,
+		input.LeaseDuration.String(),
+		claimToken,
 	))
 	if err != nil {
-		return Job{}, fmt.Errorf("mark job running: %w", err)
+		return nil, fmt.Errorf("mark job running: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return Job{}, fmt.Errorf("commit claim transaction: %w", err)
+		return nil, fmt.Errorf("commit claim transaction: %w", err)
 	}
-	return claimed, nil
+	return &ClaimResult{Job: claimed, ClaimToken: claimToken}, nil
+}
+
+func validateClaimInput(input ClaimJobInput) ([]string, error) {
+	if strings.TrimSpace(input.WorkerID) == "" || input.LeaseDuration <= 0 {
+		return nil, ErrInvalidClaimInput
+	}
+	queues := make([]string, 0, len(input.Queues))
+	seen := make(map[string]struct{}, len(input.Queues))
+	for _, queue := range input.Queues {
+		queue = strings.TrimSpace(queue)
+		if queue == "" {
+			return nil, ErrInvalidClaimInput
+		}
+		if _, exists := seen[queue]; !exists {
+			seen[queue] = struct{}{}
+			queues = append(queues, queue)
+		}
+	}
+	if len(queues) == 0 {
+		queues = []string{"default"}
+	}
+	return queues, nil
 }
 
 func (r *PostgresRepository) Complete(
 	ctx context.Context,
 	id uuid.UUID,
 	workerID string,
+	claimToken uuid.UUID,
 ) error {
-	return r.finish(ctx, id, workerID, JobStatusCompleted, nil)
+	return r.finish(ctx, id, workerID, claimToken, JobStatusCompleted, nil)
 }
 
 func (r *PostgresRepository) Fail(
 	ctx context.Context,
 	id uuid.UUID,
 	workerID string,
+	claimToken uuid.UUID,
 	failure error,
 ) error {
 	if failure == nil {
 		return errors.New("failure is required")
 	}
-	return r.finish(ctx, id, workerID, JobStatusFailed, &failure)
+	return r.finish(ctx, id, workerID, claimToken, JobStatusFailed, &failure)
 }
 
 func (r *PostgresRepository) finish(
 	ctx context.Context,
 	id uuid.UUID,
 	workerID string,
+	claimToken uuid.UUID,
 	status JobStatus,
 	failure *error,
 ) error {
@@ -350,9 +380,11 @@ func (r *PostgresRepository) finish(
 				updated_at = NOW(),
 				worker_id = NULL,
 				locked_at = NULL,
-				lease_expires_at = NULL
+				lease_expires_at = NULL,
+				claim_token = NULL
 			WHERE id = $1 AND worker_id = $2 AND status = $5
-		`, id, workerID, status, lastError, JobStatusRunning)
+			AND claim_token = $6
+		`, id, workerID, status, lastError, JobStatusRunning, claimToken)
 	if err != nil {
 		return fmt.Errorf("finish job: %w", err)
 	}

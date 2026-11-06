@@ -36,6 +36,7 @@ type Job struct {
 	WorkerID       *string
 	LockedAt       *time.Time
 	LeaseExpiresAt *time.Time
+	ClaimToken     *uuid.UUID
 }
 
 const (

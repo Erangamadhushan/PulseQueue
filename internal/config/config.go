@@ -22,6 +22,7 @@ type Config struct {
 	WorkerPollInterval    time.Duration
 	WorkerLeaseDuration   time.Duration
 	WorkerShutdownTimeout time.Duration
+	WorkerQueues          []string
 }
 
 func LoadConfig() (Config, error) {
@@ -97,6 +98,7 @@ func LoadConfig() (Config, error) {
 	if pollInterval <= 0 || leaseDuration <= 0 || shutdownTimeout <= 0 {
 		return Config{}, fmt.Errorf("worker durations must be positive")
 	}
+	queues := parseQueues(os.Getenv("PULSEQUEUE_WORKER_QUEUES"))
 
 	return Config{
 		Host:                  host,
@@ -108,7 +110,22 @@ func LoadConfig() (Config, error) {
 		WorkerPollInterval:    pollInterval,
 		WorkerLeaseDuration:   leaseDuration,
 		WorkerShutdownTimeout: shutdownTimeout,
+		WorkerQueues:          queues,
 	}, nil
+}
+
+func parseQueues(value string) []string {
+	queues := make([]string, 0)
+	for _, queue := range strings.Split(value, ",") {
+		queue = strings.TrimSpace(queue)
+		if queue != "" {
+			queues = append(queues, queue)
+		}
+	}
+	if len(queues) == 0 {
+		return []string{"default"}
+	}
+	return queues
 }
 
 func durationEnv(name string, fallback time.Duration) (time.Duration, error) {

@@ -85,16 +85,18 @@ type fakeRepository struct {
 	failed    uuid.UUID
 }
 
-func (r *fakeRepository) Claim(context.Context, string, time.Duration) (jobs.Job, error) {
-	return r.job, nil
+func (r *fakeRepository) ClaimNext(context.Context, jobs.ClaimJobInput) (*jobs.ClaimResult, error) {
+	token := uuid.New()
+	r.job.ClaimToken = &token
+	return &jobs.ClaimResult{Job: r.job, ClaimToken: token}, nil
 }
 
-func (r *fakeRepository) Complete(_ context.Context, id uuid.UUID, _ string) error {
+func (r *fakeRepository) Complete(_ context.Context, id uuid.UUID, _ string, _ uuid.UUID) error {
 	r.completed = id
 	return nil
 }
 
-func (r *fakeRepository) Fail(_ context.Context, id uuid.UUID, _ string, _ error) error {
+func (r *fakeRepository) Fail(_ context.Context, id uuid.UUID, _ string, _ uuid.UUID, _ error) error {
 	r.failed = id
 	return nil
 }

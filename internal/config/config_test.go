@@ -11,6 +11,7 @@ func TestLoadDefaultsToPort8080(t *testing.T) {
 	t.Setenv("PULSEQUEUE_API_TOKEN", "")
 	t.Setenv("PULSEQUEUE_FRONTEND_ORIGIN", "")
 	t.Setenv("PULSEQUEUE_DATABASE_URL", "postgres://localhost/pulsequeue")
+	t.Setenv("PULSEQUEUE_WORKER_QUEUES", "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -22,6 +23,9 @@ func TestLoadDefaultsToPort8080(t *testing.T) {
 	}
 	if cfg.WorkerPollInterval != time.Second || cfg.WorkerLeaseDuration != time.Minute {
 		t.Errorf("unexpected worker defaults: %+v", cfg)
+	}
+	if len(cfg.WorkerQueues) != 1 || cfg.WorkerQueues[0] != "default" {
+		t.Errorf("unexpected worker queues: %v", cfg.WorkerQueues)
 	}
 }
 

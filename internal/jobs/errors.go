@@ -8,9 +8,10 @@ import (
 )
 
 var (
-	ErrJobNotFound      = errors.New("job not found")
-	ErrNoJobs           = errors.New("no jobs available")
-	ErrJobOwnershipLost = errors.New("job ownership lost")
+	ErrJobNotFound       = errors.New("job not found")
+	ErrNoJobs            = errors.New("no jobs available")
+	ErrJobOwnershipLost  = errors.New("job ownership lost")
+	ErrInvalidClaimInput = errors.New("invalid claim input")
 
 	// Validation errors
 	ErrInvalidJobType     = errors.New("invalid job type")

@@ -316,3 +316,88 @@ func TestPostgresRepositoryListFiltersOrdersAndPaginates(t *testing.T) {
 		t.Fatalf("created timestamps are not ordered for test: %v before %v", second.CreatedAt, first.CreatedAt)
 	}
 }
+
+func TestPostgresRepositoryClaimNextAssignsOwnership(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	queue := "claim-" + uuid.NewString()
+
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue: queue, Type: "claim_test", Payload: json.RawMessage(`{}`),
+		Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	result, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID: "worker-" + uuid.NewString(), LeaseDuration: time.Minute,
+		Queues: []string{queue},
+	})
+	if err != nil {
+		t.Fatalf("claim job: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a claimed job")
+	}
+	if result.Job.ID != created.ID || result.Job.Status != jobs.JobStatusRunning {
+		t.Fatalf("claimed job = %+v, want running job %v", result.Job, created.ID)
+	}
+	if result.Job.Attempts != 1 || result.Job.ClaimToken == nil ||
+		*result.Job.ClaimToken != result.ClaimToken {
+		t.Fatalf("invalid claim ownership: %+v", result)
+	}
+}
+
+func TestPostgresRepositoryClaimNextEmptyQueueReturnsNil(t *testing.T) {
+	repo := setupRepository(t)
+	result, err := repo.ClaimNext(context.Background(), jobs.ClaimJobInput{
+		WorkerID: "worker-" + uuid.NewString(), LeaseDuration: time.Minute,
+		Queues: []string{"missing-" + uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("claim empty queue: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil", result)
+	}
+}
+
+func TestPostgresRepositoryConcurrentClaimDoesNotDuplicate(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	queue := "concurrent-claim-" + uuid.NewString()
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue: queue, Type: "claim_test", Payload: json.RawMessage(`{}`),
+		Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	results := make(chan *jobs.ClaimResult, 2)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			result, claimErr := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+				WorkerID: "worker-" + uuid.NewString(), LeaseDuration: time.Minute,
+				Queues: []string{queue},
+			})
+			results <- result
+			errs <- claimErr
+		}()
+	}
+
+	var claimed int
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent claim: %v", err)
+		}
+		if result := <-results; result != nil && result.Job.ID == created.ID {
+			claimed++
+		}
+	}
+	if claimed != 1 {
+		t.Fatalf("claims = %d, want exactly one", claimed)
+	}
+}

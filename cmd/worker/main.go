@@ -39,12 +39,13 @@ func run() error {
 
 	registry := worker.NewRegistry()
 	repository := jobs.NewPostgresRepository(db)
-	engine, err := worker.New(
+	engine, err := worker.NewWithQueues(
 		repository,
 		registry,
 		cfg.WorkerID,
 		cfg.WorkerPollInterval,
 		cfg.WorkerLeaseDuration,
+		cfg.WorkerQueues,
 		logger,
 	)
 	if err != nil {
