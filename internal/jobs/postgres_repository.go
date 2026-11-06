@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -35,7 +36,10 @@ const jobColumns = `
 	created_at,
 	updated_at,
 	started_at,
-	completed_at
+	completed_at,
+	worker_id,
+	locked_at,
+	lease_expires_at
 `
 
 func NewPostgresRepository(
@@ -66,6 +70,9 @@ func scanJob(
 		&job.UpdatedAt,
 		&job.StartedAt,
 		&job.CompletedAt,
+		&job.WorkerID,
+		&job.LockedAt,
+		&job.LeaseExpiresAt,
 	)
 
 	if err != nil {
@@ -116,7 +123,10 @@ func (r *PostgresRepository) Create(
 			created_at,
 			updated_at,
 			started_at,
-			completed_at
+			completed_at,
+			worker_id,
+			locked_at,
+			lease_expires_at
 	`
 
 	createdJob, err := scanJob(
@@ -236,8 +246,120 @@ func (r *PostgresRepository) Stats(
 	); err != nil {
 		return JobStats{}, fmt.Errorf("get job stats: %w", err)
 	}
-
 	return stats, nil
+}
+
+func (r *PostgresRepository) Claim(
+	ctx context.Context,
+	workerID string,
+	leaseDuration time.Duration,
+) (Job, error) {
+	if strings.TrimSpace(workerID) == "" {
+		return Job{}, errors.New("worker ID is required")
+	}
+	if leaseDuration <= 0 {
+		return Job{}, errors.New("lease duration must be positive")
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Job{}, fmt.Errorf("begin claim transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const query = `
+			SELECT ` + jobColumns + `
+			FROM jobs
+			WHERE status = $1 AND run_at <= NOW() AND attempts < max_attempts
+			ORDER BY created_at ASC, id ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		`
+	job, err := scanJob(tx.QueryRow(ctx, query, JobStatusPending))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Job{}, ErrNoJobs
+		}
+		return Job{}, fmt.Errorf("select job to claim: %w", err)
+	}
+
+	claimed, err := scanJob(tx.QueryRow(ctx, `
+			UPDATE jobs
+			SET status = $2,
+				attempts = attempts + 1,
+				worker_id = $3,
+				locked_at = NOW(),
+				lease_expires_at = NOW() + $4::interval,
+				started_at = COALESCE(started_at, NOW()),
+				updated_at = NOW()
+			WHERE id = $1
+			RETURNING `+jobColumns,
+		job.ID,
+		JobStatusRunning,
+		workerID,
+		leaseDuration.String(),
+	))
+	if err != nil {
+		return Job{}, fmt.Errorf("mark job running: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Job{}, fmt.Errorf("commit claim transaction: %w", err)
+	}
+	return claimed, nil
+}
+
+func (r *PostgresRepository) Complete(
+	ctx context.Context,
+	id uuid.UUID,
+	workerID string,
+) error {
+	return r.finish(ctx, id, workerID, JobStatusCompleted, nil)
+}
+
+func (r *PostgresRepository) Fail(
+	ctx context.Context,
+	id uuid.UUID,
+	workerID string,
+	failure error,
+) error {
+	if failure == nil {
+		return errors.New("failure is required")
+	}
+	return r.finish(ctx, id, workerID, JobStatusFailed, &failure)
+}
+
+func (r *PostgresRepository) finish(
+	ctx context.Context,
+	id uuid.UUID,
+	workerID string,
+	status JobStatus,
+	failure *error,
+) error {
+	var lastError *string
+	if failure != nil {
+		message := (*failure).Error()
+		lastError = &message
+	}
+
+	tag, err := r.pool.Exec(ctx, `
+			UPDATE jobs
+			SET status = $3,
+				last_error = $4,
+				completed_at = NOW(),
+				updated_at = NOW(),
+				worker_id = NULL,
+				locked_at = NULL,
+				lease_expires_at = NULL
+			WHERE id = $1 AND worker_id = $2 AND status = $5
+		`, id, workerID, status, lastError, JobStatusRunning)
+	if err != nil {
+		return fmt.Errorf("finish job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrJobOwnershipLost
+	}
+	return nil
 }
 
 func (r *PostgresRepository) List(

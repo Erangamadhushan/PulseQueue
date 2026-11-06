@@ -32,6 +32,10 @@ type Job struct {
 
 	StartedAt   *time.Time
 	CompletedAt *time.Time
+
+	WorkerID       *string
+	LockedAt       *time.Time
+	LeaseExpiresAt *time.Time
 }
 
 const (

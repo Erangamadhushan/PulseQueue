@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadDefaultsToPort8080(t *testing.T) {
 	t.Setenv("PULSEQUEUE_PORT", "")
@@ -16,6 +19,9 @@ func TestLoadDefaultsToPort8080(t *testing.T) {
 
 	if cfg.Port != "8080" {
 		t.Errorf("expected port 8080, got %q", cfg.Port)
+	}
+	if cfg.WorkerPollInterval != time.Second || cfg.WorkerLeaseDuration != time.Minute {
+		t.Errorf("unexpected worker defaults: %+v", cfg)
 	}
 }
 
