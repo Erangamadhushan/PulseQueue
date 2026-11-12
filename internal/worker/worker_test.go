@@ -205,15 +205,123 @@ func TestWorkerStopsOnLeaseOwnershipLoss(t *testing.T) {
 	}
 }
 
-type fakeRepository struct {
-	job       jobs.Job
-	completed uuid.UUID
-	failed    uuid.UUID
-	renewErr  error
-	renewed   chan struct{}
+func TestWaitForNextPollHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForNextPoll(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitForNextPoll() error = %v, want context.Canceled", err)
+	}
 }
 
-func (r *fakeRepository) ClaimNext(context.Context, jobs.ClaimJobInput) (*jobs.ClaimResult, error) {
+func TestWorkerPassesConfiguredQueuesToClaim(t *testing.T) {
+	repository := &fakeRepository{}
+	registry := NewRegistry()
+	if err := registry.Register("queued", func(context.Context, jobs.Job) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := NewWithQueues(
+		repository,
+		registry,
+		"worker-queues",
+		time.Hour,
+		time.Minute,
+		[]string{"emails", "critical"},
+		slog.Default(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "queued"}
+
+	if err := engine.processOne(context.Background()); err != nil {
+		t.Fatalf("processOne() error = %v", err)
+	}
+	if repository.claimInput.WorkerID != "worker-queues" {
+		t.Fatalf("worker ID = %q, want worker-queues", repository.claimInput.WorkerID)
+	}
+	if repository.claimInput.LeaseDuration != time.Minute {
+		t.Fatalf("lease duration = %v, want 1m", repository.claimInput.LeaseDuration)
+	}
+	if len(repository.claimInput.Queues) != 2 ||
+		repository.claimInput.Queues[0] != "emails" ||
+		repository.claimInput.Queues[1] != "critical" {
+		t.Fatalf("queues = %v, want [emails critical]", repository.claimInput.Queues)
+	}
+}
+
+func TestWorkerJoinsHandlerAfterCancellation(t *testing.T) {
+	repository := &fakeRepository{}
+	registry := NewRegistry()
+	handlerStarted := make(chan struct{})
+	handlerFinished := make(chan struct{})
+	if err := registry.Register("cancelled", func(ctx context.Context, _ jobs.Job) error {
+		close(handlerStarted)
+		<-ctx.Done()
+		close(handlerFinished)
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(repository, registry, "worker-1", time.Hour, time.Minute, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "cancelled"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- engine.processOne(ctx)
+	}()
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+	cancel()
+	select {
+	case <-handlerFinished:
+	case <-time.After(time.Second):
+		t.Fatal("handler was not joined after cancellation")
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("processOne() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestWorkerReturnsInfrastructureErrorWhenCompletionFails(t *testing.T) {
+	repository := &fakeRepository{completeErr: errors.New("database unavailable")}
+	registry := NewRegistry()
+	if err := registry.Register("success", func(context.Context, jobs.Job) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(repository, registry, "worker-1", time.Hour, time.Minute, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "success"}
+
+	err = engine.processOne(context.Background())
+	if !errors.Is(err, repository.completeErr) {
+		t.Fatalf("processOne() error = %v, want completion error", err)
+	}
+	var infrastructureErr *infrastructureError
+	if !errors.As(err, &infrastructureErr) {
+		t.Fatalf("processOne() error = %T, want infrastructureError", err)
+	}
+}
+
+type fakeRepository struct {
+	job         jobs.Job
+	claimInput  jobs.ClaimJobInput
+	completed   uuid.UUID
+	failed      uuid.UUID
+	renewErr    error
+	renewed     chan struct{}
+	completeErr error
+}
+
+func (r *fakeRepository) ClaimNext(_ context.Context, input jobs.ClaimJobInput) (*jobs.ClaimResult, error) {
+	r.claimInput = input
 	token := uuid.New()
 	r.job.ClaimToken = &token
 	return &jobs.ClaimResult{Job: r.job, ClaimToken: token}, nil
@@ -221,7 +329,7 @@ func (r *fakeRepository) ClaimNext(context.Context, jobs.ClaimJobInput) (*jobs.C
 
 func (r *fakeRepository) Complete(_ context.Context, id uuid.UUID, _ string, _ uuid.UUID) error {
 	r.completed = id
-	return nil
+	return r.completeErr
 }
 
 func (r *fakeRepository) Fail(_ context.Context, id uuid.UUID, _ string, _ uuid.UUID, _ error) error {

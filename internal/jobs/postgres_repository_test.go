@@ -214,17 +214,25 @@ func TestPostgresRepositoryStats(t *testing.T) {
 func TestPostgresRepositoryCancelRunningJob(t *testing.T) {
 	repo := setupRepository(t)
 	ctx := context.Background()
+	queue := "cancel-" + uuid.NewString()
 
 	created, err := repo.Create(ctx, jobs.Job{
-		Queue:       "cancel-" + uuid.NewString(),
+		Queue:       queue,
 		Type:        "cancel_test",
 		Payload:     json.RawMessage(`{}`),
-		Status:      jobs.JobStatusRunning,
+		Status:      jobs.JobStatusPending,
 		MaxAttempts: 3,
 		RunAt:       time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("create job: %v", err)
+	}
+	if _, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID:      "cancel-worker-" + uuid.NewString(),
+		LeaseDuration: time.Minute,
+		Queues:        []string{queue},
+	}); err != nil {
+		t.Fatalf("claim job: %v", err)
 	}
 
 	_, err = repo.Cancel(ctx, created.ID)

@@ -10,6 +10,22 @@ import (
 	"github.com/google/uuid"
 )
 
+const maxPollErrorBackoff = 10 * time.Second
+
+type jobExecutionError struct {
+	err error
+}
+
+func (e *jobExecutionError) Error() string { return e.err.Error() }
+func (e *jobExecutionError) Unwrap() error { return e.err }
+
+type infrastructureError struct {
+	err error
+}
+
+func (e *infrastructureError) Error() string { return e.err.Error() }
+func (e *infrastructureError) Unwrap() error { return e.err }
+
 type Repository interface {
 	ClaimNext(context.Context, jobs.ClaimJobInput) (*jobs.ClaimResult, error)
 	Complete(context.Context, uuid.UUID, string, uuid.UUID) error
@@ -64,30 +80,57 @@ func NewWithQueues(
 }
 
 func (w *Worker) Run(ctx context.Context) error {
-	ticker := time.NewTicker(w.pollInterval)
-	defer ticker.Stop()
-
+	backoff := time.Second
 	for {
-		if err := w.processOne(ctx); err != nil {
-			w.logger.Error("worker failed to process job", "error", err)
+		claimed, err := w.processOneResult(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			var executionErr *jobExecutionError
+			if errors.As(err, &executionErr) {
+				w.logger.Error("job execution failed", "error", err)
+				if err := waitForNextPoll(ctx, w.pollInterval); err != nil {
+					return nil
+				}
+				continue
+			}
+			w.logger.Error("worker infrastructure error", "error", err)
+			if err := waitForNextPoll(ctx, backoff); err != nil {
+				return nil
+			}
+			backoff *= 2
+			if backoff > maxPollErrorBackoff {
+				backoff = maxPollErrorBackoff
+			}
+			continue
 		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
+		backoff = time.Second
+		if !claimed {
+			if err := waitForNextPoll(ctx, w.pollInterval); err != nil {
+				return nil
+			}
 		}
 	}
 }
 
 func (w *Worker) processOne(ctx context.Context) error {
+	_, err := w.processOneResult(ctx)
+	return err
+}
+
+func (w *Worker) processOneResult(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	result, err := w.repository.ClaimNext(ctx, jobs.ClaimJobInput{
 		WorkerID: w.workerID, LeaseDuration: w.leaseDuration, Queues: w.queues,
 	})
 	if err != nil {
-		return err
+		return false, &infrastructureError{err: err}
 	}
 	if result == nil {
-		return nil
+		return false, nil
 	}
 
 	executionCtx, cancelExecution := context.WithCancel(ctx)
@@ -117,29 +160,56 @@ func (w *Worker) processOne(ctx context.Context) error {
 		cancelExecution()
 		renewalFailed = true
 		executionErr = renewalErr
+	case <-ctx.Done():
+		cancelExecution()
+		executionErr = ctx.Err()
 	}
 
 	stopRenewal()
 	<-renewalDone
 
-	select {
-	case handlerErr := <-handlerResult:
+	if renewalFailed || ctx.Err() != nil {
+		handlerErr := <-handlerResult
 		if executionErr == nil {
 			executionErr = handlerErr
 		}
-	default:
+	} else {
+		select {
+		case handlerErr := <-handlerResult:
+			if executionErr == nil {
+				executionErr = handlerErr
+			}
+		default:
+		}
 	}
 
 	if renewalFailed {
-		return executionErr
+		return true, &infrastructureError{err: executionErr}
+	}
+	if ctx.Err() != nil {
+		return true, ctx.Err()
 	}
 	if executionErr != nil {
 		if persistErr := w.repository.Fail(ctx, result.Job.ID, w.workerID, result.ClaimToken, executionErr); persistErr != nil {
-			return errors.Join(executionErr, persistErr)
+			return true, &infrastructureError{err: errors.Join(executionErr, persistErr)}
 		}
-		return executionErr
+		return true, &jobExecutionError{err: executionErr}
 	}
-	return w.repository.Complete(ctx, result.Job.ID, w.workerID, result.ClaimToken)
+	if err := w.repository.Complete(ctx, result.Job.ID, w.workerID, result.ClaimToken); err != nil {
+		return true, &infrastructureError{err: err}
+	}
+	return true, nil
+}
+
+func waitForNextPoll(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (w *Worker) renewLease(
