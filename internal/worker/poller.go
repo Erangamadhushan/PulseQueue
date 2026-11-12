@@ -189,8 +189,10 @@ func (w *Worker) processOneWithContexts(
 	var executionErr error
 	renewalFailed := false
 	shutdownTimedOut := false
+	handlerFinished := false
 	select {
 	case executionErr = <-handlerResult:
+		handlerFinished = true
 	case renewalErr := <-renewalErrors:
 		cancelExecution()
 		renewalFailed = true
@@ -204,6 +206,7 @@ func (w *Worker) processOneWithContexts(
 		timer := time.NewTimer(shutdownTimeout)
 		select {
 		case executionErr = <-handlerResult:
+			handlerFinished = true
 			timer.Stop()
 		case renewalErr := <-renewalErrors:
 			timer.Stop()
@@ -228,6 +231,7 @@ func (w *Worker) processOneWithContexts(
 	} else {
 		select {
 		case handlerErr := <-handlerResult:
+			handlerFinished = true
 			if executionErr == nil {
 				executionErr = handlerErr
 			}
@@ -239,7 +243,9 @@ func (w *Worker) processOneWithContexts(
 		return true, &infrastructureError{err: executionErr}
 	}
 	if shutdownTimedOut {
-		<-handlerResult
+		if !handlerFinished {
+			<-handlerResult
+		}
 		return true, ErrWorkerShutdown
 	}
 	if pollCtx.Err() != nil && shutdownTimeout <= 0 {
