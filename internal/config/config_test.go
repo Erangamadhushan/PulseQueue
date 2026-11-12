@@ -1,6 +1,8 @@
 package config
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestLoadDefaultsToPort8080(t *testing.T) {
 	t.Setenv("PULSEQUEUE_PORT", "")
@@ -8,7 +10,6 @@ func TestLoadDefaultsToPort8080(t *testing.T) {
 	t.Setenv("PULSEQUEUE_API_TOKEN", "")
 	t.Setenv("PULSEQUEUE_FRONTEND_ORIGIN", "")
 	t.Setenv("PULSEQUEUE_DATABASE_URL", "postgres://localhost/pulsequeue")
-
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)

@@ -77,6 +77,13 @@ func (f *fakeRepository) Stats(_ context.Context) (JobStats, error) {
 	return f.stats, nil
 }
 
+func (f *fakeRepository) ClaimNext(
+	_ context.Context,
+	_ ClaimJobInput,
+) (*ClaimResult, error) {
+	return nil, nil
+}
+
 func TestServiceCreateJobAppliesDefaults(
 	t *testing.T,
 ) {

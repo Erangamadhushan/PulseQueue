@@ -175,20 +175,30 @@ func TestPostgresRepositoryStats(t *testing.T) {
 	ctx := context.Background()
 	queue := "stats-" + uuid.NewString()
 
+	var pending jobs.Job
 	for _, status := range []jobs.JobStatus{
 		jobs.JobStatusPending,
-		jobs.JobStatusRunning,
 		jobs.JobStatusCompleted,
 		jobs.JobStatusFailed,
 		jobs.JobStatusCancelled,
 	} {
-		_, err := repo.Create(ctx, jobs.Job{
+		created, err := repo.Create(ctx, jobs.Job{
 			Queue: queue, Type: "stats_test", Payload: json.RawMessage(`{}`),
 			Status: status, MaxAttempts: 3, RunAt: time.Now().UTC(),
 		})
 		if err != nil {
 			t.Fatalf("create %s job: %v", status, err)
 		}
+		if status == jobs.JobStatusPending {
+			pending = created
+		}
+	}
+	if _, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID:      "stats-worker-" + uuid.NewString(),
+		LeaseDuration: time.Minute,
+		Queues:        []string{queue},
+	}); err != nil {
+		t.Fatalf("claim pending stats job %s: %v", pending.ID, err)
 	}
 
 	stats, err := repo.Stats(ctx)
@@ -204,17 +214,25 @@ func TestPostgresRepositoryStats(t *testing.T) {
 func TestPostgresRepositoryCancelRunningJob(t *testing.T) {
 	repo := setupRepository(t)
 	ctx := context.Background()
+	queue := "cancel-" + uuid.NewString()
 
 	created, err := repo.Create(ctx, jobs.Job{
-		Queue:       "cancel-" + uuid.NewString(),
+		Queue:       queue,
 		Type:        "cancel_test",
 		Payload:     json.RawMessage(`{}`),
-		Status:      jobs.JobStatusRunning,
+		Status:      jobs.JobStatusPending,
 		MaxAttempts: 3,
 		RunAt:       time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("create job: %v", err)
+	}
+	if _, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID:      "cancel-worker-" + uuid.NewString(),
+		LeaseDuration: time.Minute,
+		Queues:        []string{queue},
+	}); err != nil {
+		t.Fatalf("claim job: %v", err)
 	}
 
 	_, err = repo.Cancel(ctx, created.ID)
@@ -314,5 +332,194 @@ func TestPostgresRepositoryListFiltersOrdersAndPaginates(t *testing.T) {
 	}
 	if second.CreatedAt.Before(first.CreatedAt) {
 		t.Fatalf("created timestamps are not ordered for test: %v before %v", second.CreatedAt, first.CreatedAt)
+	}
+}
+
+func TestPostgresRepositoryClaimNextAssignsOwnership(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	queue := "claim-" + uuid.NewString()
+
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue: queue, Type: "claim_test", Payload: json.RawMessage(`{}`),
+		Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	result, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID: "worker-" + uuid.NewString(), LeaseDuration: time.Minute,
+		Queues: []string{queue},
+	})
+	if err != nil {
+		t.Fatalf("claim job: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a claimed job")
+	}
+	if result.Job.ID != created.ID || result.Job.Status != jobs.JobStatusRunning {
+		t.Fatalf("claimed job = %+v, want running job %v", result.Job, created.ID)
+	}
+	if result.Job.Attempts != 1 || result.Job.ClaimToken == nil ||
+		*result.Job.ClaimToken != result.ClaimToken {
+		t.Fatalf("invalid claim ownership: %+v", result)
+	}
+}
+
+func TestPostgresRepositoryClaimNextEmptyQueueReturnsNil(t *testing.T) {
+	repo := setupRepository(t)
+	result, err := repo.ClaimNext(context.Background(), jobs.ClaimJobInput{
+		WorkerID: "worker-" + uuid.NewString(), LeaseDuration: time.Minute,
+		Queues: []string{"missing-" + uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("claim empty queue: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil", result)
+	}
+}
+
+func TestPostgresRepositoryConcurrentClaimDoesNotDuplicate(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	queue := "concurrent-claim-" + uuid.NewString()
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue: queue, Type: "claim_test", Payload: json.RawMessage(`{}`),
+		Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	results := make(chan *jobs.ClaimResult, 2)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			result, claimErr := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+				WorkerID: "worker-" + uuid.NewString(), LeaseDuration: time.Minute,
+				Queues: []string{queue},
+			})
+			results <- result
+			errs <- claimErr
+		}()
+	}
+
+	var claimed int
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent claim: %v", err)
+		}
+		if result := <-results; result != nil && result.Job.ID == created.ID {
+			claimed++
+		}
+	}
+	if claimed != 1 {
+		t.Fatalf("claims = %d, want exactly one", claimed)
+	}
+}
+
+func TestPostgresRepositoryRenewLeaseChecksOwnership(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	queue := "renew-" + uuid.NewString()
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue: queue, Type: "renew_test", Payload: json.RawMessage(`{}`),
+		Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	workerID := "worker-" + uuid.NewString()
+	claim, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID: workerID, LeaseDuration: time.Minute, Queues: []string{queue},
+	})
+	if err != nil {
+		t.Fatalf("claim job: %v", err)
+	}
+	if claim == nil {
+		t.Fatal("expected a claimed job")
+	}
+
+	before, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get claimed job: %v", err)
+	}
+	if err := repo.RenewLease(ctx, created.ID, workerID, claim.ClaimToken, 2*time.Minute); err != nil {
+		t.Fatalf("renew lease: %v", err)
+	}
+	after, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get renewed job: %v", err)
+	}
+	if after.LeaseExpiresAt == nil || before.LeaseExpiresAt == nil ||
+		!after.LeaseExpiresAt.After(*before.LeaseExpiresAt) {
+		t.Fatalf("lease expiry did not advance: before=%v after=%v", before.LeaseExpiresAt, after.LeaseExpiresAt)
+	}
+
+	if err := repo.RenewLease(ctx, created.ID, workerID, uuid.New(), time.Minute); !errors.Is(err, jobs.ErrJobOwnershipLost) {
+		t.Fatalf("wrong token error = %v, want ErrJobOwnershipLost", err)
+	}
+}
+
+func TestPostgresRepositoryCompletionAndFailureEnforceOwnership(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+
+	claimJob := func(t *testing.T, queue string) (*jobs.ClaimResult, string) {
+		t.Helper()
+		created, err := repo.Create(ctx, jobs.Job{
+			Queue: queue, Type: "lifecycle_test", Payload: json.RawMessage(`{}`),
+			Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+		workerID := "worker-" + uuid.NewString()
+		claim, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+			WorkerID: workerID, LeaseDuration: time.Minute, Queues: []string{queue},
+		})
+		if err != nil || claim == nil {
+			t.Fatalf("claim job: result=%v error=%v", claim, err)
+		}
+		if claim.Job.ID != created.ID {
+			t.Fatalf("claimed ID = %v, want %v", claim.Job.ID, created.ID)
+		}
+		return claim, workerID
+	}
+
+	completedClaim, completedWorker := claimJob(t, "complete-"+uuid.NewString())
+	if err := repo.Complete(ctx, completedClaim.Job.ID, completedWorker, uuid.New()); !errors.Is(err, jobs.ErrJobOwnershipLost) {
+		t.Fatalf("wrong completion token error = %v, want ErrJobOwnershipLost", err)
+	}
+	if err := repo.Complete(ctx, completedClaim.Job.ID, completedWorker, completedClaim.ClaimToken); err != nil {
+		t.Fatalf("complete job: %v", err)
+	}
+	completed, err := repo.GetByID(ctx, completedClaim.Job.ID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.Status != jobs.JobStatusCompleted || completed.CompletedAt == nil ||
+		completed.WorkerID != nil || completed.ClaimToken != nil {
+		t.Fatalf("completed job ownership state = %+v", completed)
+	}
+
+	failedClaim, failedWorker := claimJob(t, "fail-"+uuid.NewString())
+	if err := repo.Fail(ctx, failedClaim.Job.ID, failedWorker, uuid.New(), errors.New("stale")); !errors.Is(err, jobs.ErrJobOwnershipLost) {
+		t.Fatalf("wrong failure token error = %v, want ErrJobOwnershipLost", err)
+	}
+	if err := repo.Fail(ctx, failedClaim.Job.ID, failedWorker, failedClaim.ClaimToken, errors.New("handler failed")); err != nil {
+		t.Fatalf("fail job: %v", err)
+	}
+	failed, err := repo.GetByID(ctx, failedClaim.Job.ID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.Status != jobs.JobStatusFailed || failed.LastError == nil ||
+		*failed.LastError != "handler failed" || failed.CompletedAt != nil ||
+		failed.WorkerID != nil || failed.ClaimToken != nil {
+		t.Fatalf("failed job state = %+v", failed)
 	}
 }
