@@ -7,22 +7,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 )
 
 type Config struct {
-	Host                  string
-	Port                  string
-	DatabaseURL           string
-	APIToken              string
-	FrontendOrigin        string
-	WorkerID              string
-	WorkerPollInterval    time.Duration
-	WorkerLeaseDuration   time.Duration
-	WorkerShutdownTimeout time.Duration
-	WorkerQueues          []string
+	Host           string
+	Port           string
+	DatabaseURL    string
+	APIToken       string
+	FrontendOrigin string
 }
 
 func LoadConfig() (Config, error) {
@@ -79,65 +71,13 @@ func LoadConfig() (Config, error) {
 		)
 	}
 
-	workerID := strings.TrimSpace(os.Getenv("PULSEQUEUE_WORKER_ID"))
-	if workerID == "" {
-		workerID = "worker-" + uuid.NewString()
-	}
-	pollInterval, err := durationEnv("PULSEQUEUE_WORKER_POLL_INTERVAL", time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	leaseDuration, err := durationEnv("PULSEQUEUE_WORKER_LEASE_DURATION", time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-	shutdownTimeout, err := durationEnv("PULSEQUEUE_WORKER_SHUTDOWN_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	if pollInterval <= 0 || leaseDuration <= 0 || shutdownTimeout <= 0 {
-		return Config{}, fmt.Errorf("worker durations must be positive")
-	}
-	queues := parseQueues(os.Getenv("PULSEQUEUE_WORKER_QUEUES"))
-
 	return Config{
-		Host:                  host,
-		Port:                  port,
-		DatabaseURL:           databaseURL,
-		APIToken:              apiToken,
-		FrontendOrigin:        frontendOrigin,
-		WorkerID:              workerID,
-		WorkerPollInterval:    pollInterval,
-		WorkerLeaseDuration:   leaseDuration,
-		WorkerShutdownTimeout: shutdownTimeout,
-		WorkerQueues:          queues,
+		Host:           host,
+		Port:           port,
+		DatabaseURL:    databaseURL,
+		APIToken:       apiToken,
+		FrontendOrigin: frontendOrigin,
 	}, nil
-}
-
-func parseQueues(value string) []string {
-	queues := make([]string, 0)
-	for _, queue := range strings.Split(value, ",") {
-		queue = strings.TrimSpace(queue)
-		if queue != "" {
-			queues = append(queues, queue)
-		}
-	}
-	if len(queues) == 0 {
-		return []string{"default"}
-	}
-	return queues
-}
-
-func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	duration, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, fmt.Errorf("invalid %s %q: %w", name, value, err)
-	}
-	return duration, nil
 }
 
 func isLoopbackHost(host string) bool {

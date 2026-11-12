@@ -7,7 +7,8 @@ import (
 )
 
 var (
-	ErrEmptyHandlerName = errors.New("handler name is required")
+	ErrEmptyJobType     = errors.New("job type cannot be empty")
+	ErrEmptyHandlerName = ErrEmptyJobType
 	ErrNilHandler       = errors.New("handler cannot be nil")
 	ErrDuplicateHandler = errors.New("handler is already registered")
 	ErrHandlerNotFound  = errors.New("handler is not registered")
@@ -41,11 +42,22 @@ func (r *Registry) Register(name string, handler Handler) error {
 }
 
 func (r *Registry) Resolve(name string) (Handler, error) {
-	r.mu.RLock()
-	handler, exists := r.handlers[name]
-	r.mu.RUnlock()
+	handler, exists := r.Get(name)
 	if !exists {
 		return nil, ErrHandlerNotFound
 	}
 	return handler, nil
+}
+
+func (r *Registry) Get(jobType string) (Handler, bool) {
+	jobType = strings.TrimSpace(jobType)
+	r.mu.RLock()
+	handler, exists := r.handlers[jobType]
+	r.mu.RUnlock()
+	return handler, exists
+}
+
+func (r *Registry) Has(jobType string) bool {
+	_, exists := r.Get(jobType)
+	return exists
 }

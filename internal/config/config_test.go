@@ -2,7 +2,6 @@ package config
 
 import (
 	"testing"
-	"time"
 )
 
 func TestLoadDefaultsToPort8080(t *testing.T) {
@@ -11,8 +10,6 @@ func TestLoadDefaultsToPort8080(t *testing.T) {
 	t.Setenv("PULSEQUEUE_API_TOKEN", "")
 	t.Setenv("PULSEQUEUE_FRONTEND_ORIGIN", "")
 	t.Setenv("PULSEQUEUE_DATABASE_URL", "postgres://localhost/pulsequeue")
-	t.Setenv("PULSEQUEUE_WORKER_QUEUES", "")
-
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -20,12 +17,6 @@ func TestLoadDefaultsToPort8080(t *testing.T) {
 
 	if cfg.Port != "8080" {
 		t.Errorf("expected port 8080, got %q", cfg.Port)
-	}
-	if cfg.WorkerPollInterval != time.Second || cfg.WorkerLeaseDuration != time.Minute {
-		t.Errorf("unexpected worker defaults: %+v", cfg)
-	}
-	if len(cfg.WorkerQueues) != 1 || cfg.WorkerQueues[0] != "default" {
-		t.Errorf("unexpected worker queues: %v", cfg.WorkerQueues)
 	}
 }
 

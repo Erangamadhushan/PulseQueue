@@ -1,4 +1,4 @@
-package worker
+package main
 
 import (
 	"context"
@@ -31,6 +31,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
+	workerCfg, err := worker.LoadWorkerConfig()
+	if err != nil {
+		return fmt.Errorf("load worker configuration: %w", err)
+	}
 	db, err := database.NewPostgresPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("connect PostgreSQL: %w", err)
@@ -42,16 +46,16 @@ func run() error {
 	engine, err := worker.NewWithQueues(
 		repository,
 		registry,
-		cfg.WorkerID,
-		cfg.WorkerPollInterval,
-		cfg.WorkerLeaseDuration,
-		cfg.WorkerQueues,
+		workerCfg.ID,
+		workerCfg.PollInterval,
+		workerCfg.LeaseDuration,
+		workerCfg.Queues,
 		logger,
 	)
 	if err != nil {
 		return fmt.Errorf("create worker: %w", err)
 	}
-	logger.Info("PulseQueue worker started", "worker_id", cfg.WorkerID)
+	logger.Info("PulseQueue worker started", "worker_id", workerCfg.ID)
 	if err := engine.Run(ctx); err != nil {
 		return fmt.Errorf("run worker: %w", err)
 	}

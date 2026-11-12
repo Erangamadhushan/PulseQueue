@@ -33,6 +33,22 @@ func TestRegistryRejectsInvalidAndDuplicateHandlers(t *testing.T) {
 	}
 }
 
+func TestRegistryGetAndHas(t *testing.T) {
+	registry := NewRegistry()
+	handler := func(context.Context, jobs.Job) error { return nil }
+	if err := registry.Register(" send_email ", handler); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := registry.Get("send_email")
+	if !ok || got == nil || !registry.Has("send_email") {
+		t.Fatal("expected registered handler to be available")
+	}
+	if _, ok := registry.Get("missing"); ok || registry.Has("missing") {
+		t.Fatal("did not expect unknown handler")
+	}
+}
+
 func TestExecutorConvertsPanicsToErrors(t *testing.T) {
 	registry := NewRegistry()
 	if err := registry.Register("panic", func(context.Context, jobs.Job) error {
