@@ -41,9 +41,7 @@ type Repository interface {
 	List(ctx context.Context, filter ListJobsFilter) ([]Job, error)
 	Cancel(ctx context.Context, id uuid.UUID) (Job, error)
 	Stats(ctx context.Context) (JobStats, error)
-}
-
-type ClaimRepository interface {
-	Repository
 	ClaimNext(ctx context.Context, input ClaimJobInput) (*ClaimResult, error)
 }
+
+type ClaimRepository = Repository

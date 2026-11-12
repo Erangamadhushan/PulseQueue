@@ -20,6 +20,7 @@ type rowScanner interface {
 }
 
 var _ Repository = (*PostgresRepository)(nil)
+var _ ClaimRepository = (*PostgresRepository)(nil)
 
 const jobColumns = `
 	id,
@@ -292,7 +293,7 @@ func (r *PostgresRepository) ClaimNext(
 				attempts = attempts + 1,
 				worker_id = $3,
 				locked_at = NOW(),
-				lease_expires_at = NOW() + $4::interval,
+				lease_expires_at = NOW() + ($4 * INTERVAL '1 second'),
 				claim_token = $5,
 				started_at = COALESCE(started_at, NOW()),
 				updated_at = NOW()
@@ -300,8 +301,8 @@ func (r *PostgresRepository) ClaimNext(
 			RETURNING `+jobColumns,
 		job.ID,
 		JobStatusRunning,
-		input.WorkerID,
-		input.LeaseDuration.String(),
+		strings.TrimSpace(input.WorkerID),
+		input.LeaseDuration.Seconds(),
 		claimToken,
 	))
 	if err != nil {

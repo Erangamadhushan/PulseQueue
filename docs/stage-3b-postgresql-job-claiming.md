@@ -470,6 +470,10 @@ The implementation should generate a new UUID claim token for every claim attemp
 
 The transaction must commit successfully before returning the claimed job to the caller.
 
+The Go implementation expresses the lease as a number of seconds multiplied by
+PostgreSQL's `INTERVAL '1 second'`. This avoids passing Go duration strings such
+as `1m0s` as PostgreSQL interval literals.
+
 ## 6.4 No Available Jobs
 
 When no eligible job exists, the repository should return:

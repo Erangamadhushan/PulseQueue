@@ -175,20 +175,30 @@ func TestPostgresRepositoryStats(t *testing.T) {
 	ctx := context.Background()
 	queue := "stats-" + uuid.NewString()
 
+	var pending jobs.Job
 	for _, status := range []jobs.JobStatus{
 		jobs.JobStatusPending,
-		jobs.JobStatusRunning,
 		jobs.JobStatusCompleted,
 		jobs.JobStatusFailed,
 		jobs.JobStatusCancelled,
 	} {
-		_, err := repo.Create(ctx, jobs.Job{
+		created, err := repo.Create(ctx, jobs.Job{
 			Queue: queue, Type: "stats_test", Payload: json.RawMessage(`{}`),
 			Status: status, MaxAttempts: 3, RunAt: time.Now().UTC(),
 		})
 		if err != nil {
 			t.Fatalf("create %s job: %v", status, err)
 		}
+		if status == jobs.JobStatusPending {
+			pending = created
+		}
+	}
+	if _, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID:      "stats-worker-" + uuid.NewString(),
+		LeaseDuration: time.Minute,
+		Queues:        []string{queue},
+	}); err != nil {
+		t.Fatalf("claim pending stats job %s: %v", pending.ID, err)
 	}
 
 	stats, err := repo.Stats(ctx)
