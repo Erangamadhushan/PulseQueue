@@ -80,10 +80,32 @@ func NewWithQueues(
 }
 
 func (w *Worker) Run(ctx context.Context) error {
+	return w.run(ctx, 0)
+}
+
+// RunGraceful stops polling on cancellation and gives the active job a grace
+// period before cancelling its execution context.
+func (w *Worker) RunGraceful(ctx context.Context, shutdownTimeout time.Duration) error {
+	if shutdownTimeout <= 0 {
+		return errors.New("shutdown timeout must be positive")
+	}
+	return w.run(ctx, shutdownTimeout)
+}
+
+func (w *Worker) run(ctx context.Context, shutdownTimeout time.Duration) error {
 	backoff := time.Second
 	for {
-		claimed, err := w.processOneResult(ctx)
+		var claimed bool
+		var err error
+		if shutdownTimeout > 0 {
+			claimed, err = w.processOneGracefulResult(ctx, shutdownTimeout)
+		} else {
+			claimed, err = w.processOneResult(ctx)
+		}
 		if err != nil {
+			if errors.Is(err, ErrWorkerShutdown) {
+				return nil
+			}
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -120,10 +142,22 @@ func (w *Worker) processOne(ctx context.Context) error {
 }
 
 func (w *Worker) processOneResult(ctx context.Context) (bool, error) {
-	if err := ctx.Err(); err != nil {
+	return w.processOneWithContexts(ctx, ctx, 0)
+}
+
+func (w *Worker) processOneGracefulResult(ctx context.Context, shutdownTimeout time.Duration) (bool, error) {
+	return w.processOneWithContexts(ctx, context.WithoutCancel(ctx), shutdownTimeout)
+}
+
+func (w *Worker) processOneWithContexts(
+	pollCtx context.Context,
+	executionParent context.Context,
+	shutdownTimeout time.Duration,
+) (bool, error) {
+	if err := pollCtx.Err(); err != nil {
 		return false, err
 	}
-	result, err := w.repository.ClaimNext(ctx, jobs.ClaimJobInput{
+	result, err := w.repository.ClaimNext(pollCtx, jobs.ClaimJobInput{
 		WorkerID: w.workerID, LeaseDuration: w.leaseDuration, Queues: w.queues,
 	})
 	if err != nil {
@@ -133,7 +167,7 @@ func (w *Worker) processOneResult(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	executionCtx, cancelExecution := context.WithCancel(ctx)
+	executionCtx, cancelExecution := context.WithCancel(executionParent)
 	defer cancelExecution()
 
 	renewalCtx, stopRenewal := context.WithCancel(executionCtx)
@@ -154,21 +188,39 @@ func (w *Worker) processOneResult(ctx context.Context) (bool, error) {
 
 	var executionErr error
 	renewalFailed := false
+	shutdownTimedOut := false
 	select {
 	case executionErr = <-handlerResult:
 	case renewalErr := <-renewalErrors:
 		cancelExecution()
 		renewalFailed = true
 		executionErr = renewalErr
-	case <-ctx.Done():
-		cancelExecution()
-		executionErr = ctx.Err()
+	case <-pollCtx.Done():
+		if shutdownTimeout <= 0 {
+			cancelExecution()
+			executionErr = pollCtx.Err()
+			break
+		}
+		timer := time.NewTimer(shutdownTimeout)
+		select {
+		case executionErr = <-handlerResult:
+			timer.Stop()
+		case renewalErr := <-renewalErrors:
+			timer.Stop()
+			cancelExecution()
+			renewalFailed = true
+			executionErr = renewalErr
+		case <-timer.C:
+			shutdownTimedOut = true
+			cancelExecution()
+			executionErr = ErrWorkerShutdown
+		}
 	}
 
 	stopRenewal()
 	<-renewalDone
 
-	if renewalFailed || ctx.Err() != nil {
+	if renewalFailed || (pollCtx.Err() != nil && !shutdownTimedOut && shutdownTimeout <= 0) {
 		handlerErr := <-handlerResult
 		if executionErr == nil {
 			executionErr = handlerErr
@@ -186,16 +238,28 @@ func (w *Worker) processOneResult(ctx context.Context) (bool, error) {
 	if renewalFailed {
 		return true, &infrastructureError{err: executionErr}
 	}
-	if ctx.Err() != nil {
-		return true, ctx.Err()
+	if shutdownTimedOut {
+		<-handlerResult
+		return true, ErrWorkerShutdown
+	}
+	if pollCtx.Err() != nil && shutdownTimeout <= 0 {
+		return true, pollCtx.Err()
 	}
 	if executionErr != nil {
-		if persistErr := w.repository.Fail(ctx, result.Job.ID, w.workerID, result.ClaimToken, executionErr); persistErr != nil {
+		persistenceCtx := pollCtx
+		if shutdownTimeout > 0 {
+			persistenceCtx = context.WithoutCancel(pollCtx)
+		}
+		if persistErr := w.repository.Fail(persistenceCtx, result.Job.ID, w.workerID, result.ClaimToken, executionErr); persistErr != nil {
 			return true, &infrastructureError{err: errors.Join(executionErr, persistErr)}
 		}
 		return true, &jobExecutionError{err: executionErr}
 	}
-	if err := w.repository.Complete(ctx, result.Job.ID, w.workerID, result.ClaimToken); err != nil {
+	persistenceCtx := pollCtx
+	if shutdownTimeout > 0 {
+		persistenceCtx = context.WithoutCancel(pollCtx)
+	}
+	if err := w.repository.Complete(persistenceCtx, result.Job.ID, w.workerID, result.ClaimToken); err != nil {
 		return true, &infrastructureError{err: err}
 	}
 	return true, nil

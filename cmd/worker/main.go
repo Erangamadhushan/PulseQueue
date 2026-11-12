@@ -24,8 +24,16 @@ func main() {
 
 func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	go func() {
+		<-signals
+		cancel()
+		signal.Stop(signals)
+	}()
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -56,7 +64,7 @@ func run() error {
 		return fmt.Errorf("create worker: %w", err)
 	}
 	logger.Info("PulseQueue worker started", "worker_id", workerCfg.ID)
-	if err := engine.Run(ctx); err != nil {
+	if err := engine.RunGraceful(ctx, workerCfg.ShutdownTimeout); err != nil {
 		return fmt.Errorf("run worker: %w", err)
 	}
 	logger.Info("PulseQueue worker stopped")

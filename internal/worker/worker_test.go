@@ -288,6 +288,115 @@ func TestWorkerJoinsHandlerAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestWorkerGracefulShutdownDrainsActiveJob(t *testing.T) {
+	repository := &fakeRepository{claimOnce: true}
+	registry := NewRegistry()
+	handlerStarted := make(chan struct{})
+	handlerCancelled := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	if err := registry.Register("drain", func(ctx context.Context, _ jobs.Job) error {
+		close(handlerStarted)
+		select {
+		case <-ctx.Done():
+			close(handlerCancelled)
+			return ctx.Err()
+		case <-releaseHandler:
+			return nil
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(repository, registry, "worker-1", time.Millisecond, time.Second, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "drain"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- engine.RunGraceful(ctx, time.Second)
+	}()
+
+	<-handlerStarted
+	cancel()
+	select {
+	case <-handlerCancelled:
+		t.Fatal("handler was cancelled before the grace period expired")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseHandler)
+
+	if err := <-result; err != nil {
+		t.Fatalf("RunGraceful() error = %v", err)
+	}
+	if repository.completed != repository.job.ID {
+		t.Fatalf("completed ID = %v, want %v", repository.completed, repository.job.ID)
+	}
+	if repository.failed != uuid.Nil {
+		t.Fatalf("failed ID = %v, want no failed job", repository.failed)
+	}
+}
+
+func TestWorkerGracefulShutdownCancelsAfterTimeoutWithoutPersistence(t *testing.T) {
+	repository := &fakeRepository{claimOnce: true}
+	registry := NewRegistry()
+	handlerStarted := make(chan struct{})
+	handlerCancelled := make(chan struct{})
+	if err := registry.Register("stuck", func(ctx context.Context, _ jobs.Job) error {
+		close(handlerStarted)
+		<-ctx.Done()
+		close(handlerCancelled)
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(repository, registry, "worker-1", time.Millisecond, time.Second, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "stuck"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- engine.RunGraceful(ctx, 25*time.Millisecond)
+	}()
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+	cancel()
+	select {
+	case <-handlerCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("handler was not cancelled after shutdown timeout")
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("RunGraceful() error = %v", err)
+	}
+	if repository.completed != uuid.Nil || repository.failed != uuid.Nil {
+		t.Fatal("shutdown cancellation persisted a job result")
+	}
+}
+
+func TestWorkerGracefulShutdownDoesNotClaimAfterCancellation(t *testing.T) {
+	repository := &fakeRepository{}
+	engine, err := New(repository, NewRegistry(), "worker-1", time.Millisecond, time.Second, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := engine.RunGraceful(ctx, time.Second); err != nil {
+		t.Fatalf("RunGraceful() error = %v", err)
+	}
+	if repository.claimCalls != 0 {
+		t.Fatalf("claim calls = %d, want 0", repository.claimCalls)
+	}
+}
+
 func TestWorkerReturnsInfrastructureErrorWhenCompletionFails(t *testing.T) {
 	repository := &fakeRepository{completeErr: errors.New("database unavailable")}
 	registry := NewRegistry()
@@ -313,6 +422,9 @@ func TestWorkerReturnsInfrastructureErrorWhenCompletionFails(t *testing.T) {
 type fakeRepository struct {
 	job         jobs.Job
 	claimInput  jobs.ClaimJobInput
+	claimCalls  int
+	claimOnce   bool
+	claimed     bool
 	completed   uuid.UUID
 	failed      uuid.UUID
 	renewErr    error
@@ -321,7 +433,12 @@ type fakeRepository struct {
 }
 
 func (r *fakeRepository) ClaimNext(_ context.Context, input jobs.ClaimJobInput) (*jobs.ClaimResult, error) {
+	r.claimCalls++
 	r.claimInput = input
+	if r.claimOnce && r.claimed {
+		return nil, nil
+	}
+	r.claimed = true
 	token := uuid.New()
 	r.job.ClaimToken = &token
 	return &jobs.ClaimResult{Job: r.job, ClaimToken: token}, nil
