@@ -14,6 +14,7 @@ type Repository interface {
 	ClaimNext(context.Context, jobs.ClaimJobInput) (*jobs.ClaimResult, error)
 	Complete(context.Context, uuid.UUID, string, uuid.UUID) error
 	Fail(context.Context, uuid.UUID, string, uuid.UUID, error) error
+	RenewLease(context.Context, uuid.UUID, string, uuid.UUID, time.Duration) error
 }
 
 type Worker struct {
@@ -88,12 +89,90 @@ func (w *Worker) processOne(ctx context.Context) error {
 	if result == nil {
 		return nil
 	}
-	job := result.Job
-	if err := w.executor.Execute(ctx, job); err != nil {
-		if persistErr := w.repository.Fail(ctx, job.ID, w.workerID, result.ClaimToken, err); persistErr != nil {
-			return errors.Join(err, persistErr)
-		}
-		return err
+
+	executionCtx, cancelExecution := context.WithCancel(ctx)
+	defer cancelExecution()
+
+	renewalCtx, stopRenewal := context.WithCancel(executionCtx)
+	renewalErrors := make(chan error, 1)
+	renewalDone := make(chan struct{})
+	go w.renewLease(
+		renewalCtx,
+		renewalDone,
+		renewalErrors,
+		result.Job.ID,
+		result.ClaimToken,
+	)
+
+	handlerResult := make(chan error, 1)
+	go func() {
+		handlerResult <- w.executor.Execute(executionCtx, result.Job)
+	}()
+
+	var executionErr error
+	renewalFailed := false
+	select {
+	case executionErr = <-handlerResult:
+	case renewalErr := <-renewalErrors:
+		cancelExecution()
+		renewalFailed = true
+		executionErr = renewalErr
 	}
-	return w.repository.Complete(ctx, job.ID, w.workerID, result.ClaimToken)
+
+	stopRenewal()
+	<-renewalDone
+
+	select {
+	case handlerErr := <-handlerResult:
+		if executionErr == nil {
+			executionErr = handlerErr
+		}
+	default:
+	}
+
+	if renewalFailed {
+		return executionErr
+	}
+	if executionErr != nil {
+		if persistErr := w.repository.Fail(ctx, result.Job.ID, w.workerID, result.ClaimToken, executionErr); persistErr != nil {
+			return errors.Join(executionErr, persistErr)
+		}
+		return executionErr
+	}
+	return w.repository.Complete(ctx, result.Job.ID, w.workerID, result.ClaimToken)
+}
+
+func (w *Worker) renewLease(
+	ctx context.Context,
+	done chan<- struct{},
+	errs chan<- error,
+	jobID uuid.UUID,
+	claimToken uuid.UUID,
+) {
+	defer close(done)
+
+	interval := w.leaseDuration / 3
+	if interval <= 0 {
+		interval = time.Nanosecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := w.repository.RenewLease(
+				ctx,
+				jobID,
+				w.workerID,
+				claimToken,
+				w.leaseDuration,
+			); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}
 }

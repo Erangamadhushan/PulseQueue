@@ -65,10 +65,12 @@ func TestExecutorConvertsPanicsToErrors(t *testing.T) {
 
 func TestWorkerPersistsSuccessAndFailure(t *testing.T) {
 	repository := &fakeRepository{}
+	repository.renewed = make(chan struct{}, 1)
 	registry := NewRegistry()
 	if err := registry.Register("success", func(context.Context, jobs.Job) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := registry.Register("failure", func(context.Context, jobs.Job) error { return errors.New("failed") }); err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +97,120 @@ func TestWorkerPersistsSuccessAndFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerFailsUnknownHandler(t *testing.T) {
+	repository := &fakeRepository{}
+	engine, err := New(repository, NewRegistry(), "worker-1", time.Hour, time.Minute, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "missing"}
+
+	err = engine.processOne(context.Background())
+	if err == nil {
+		t.Fatal("expected unknown handler error")
+	}
+	if repository.failed != repository.job.ID {
+		t.Fatalf("failed ID = %v, want %v", repository.failed, repository.job.ID)
+	}
+}
+
+func TestWorkerPersistsPanicAsFailure(t *testing.T) {
+	repository := &fakeRepository{}
+	registry := NewRegistry()
+	if err := registry.Register("panic", func(context.Context, jobs.Job) error {
+		panic("boom")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(repository, registry, "worker-1", time.Hour, time.Minute, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "panic"}
+
+	err = engine.processOne(context.Background())
+	if err == nil || err.Error() != "handler panic: boom" {
+		t.Fatalf("error = %v, want handler panic", err)
+	}
+	if repository.failed != repository.job.ID {
+		t.Fatalf("failed ID = %v, want %v", repository.failed, repository.job.ID)
+	}
+}
+
+func TestWorkerRenewsLeaseDuringExecution(t *testing.T) {
+	repository := &fakeRepository{}
+	repository.renewed = make(chan struct{}, 1)
+	registry := NewRegistry()
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	if err := registry.Register("slow", func(context.Context, jobs.Job) error {
+		close(handlerStarted)
+		<-releaseHandler
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine, err := New(repository, registry, "worker-1", time.Hour, 30*time.Millisecond, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "slow"}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- engine.processOne(context.Background())
+	}()
+	<-handlerStarted
+	select {
+	case <-repository.renewed:
+	case <-time.After(time.Second):
+		t.Fatal("lease was not renewed")
+	}
+	close(releaseHandler)
+	if err := <-result; err != nil {
+		t.Fatalf("processOne() error = %v", err)
+	}
+}
+
+func TestWorkerStopsOnLeaseOwnershipLoss(t *testing.T) {
+	repository := &fakeRepository{renewErr: jobs.ErrJobOwnershipLost}
+	registry := NewRegistry()
+	handlerCancelled := make(chan struct{})
+	if err := registry.Register("slow", func(ctx context.Context, _ jobs.Job) error {
+		<-ctx.Done()
+		close(handlerCancelled)
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine, err := New(repository, registry, "worker-1", time.Hour, 30*time.Millisecond, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.job = jobs.Job{ID: uuid.New(), Type: "slow"}
+
+	err = engine.processOne(context.Background())
+	if !errors.Is(err, jobs.ErrJobOwnershipLost) {
+		t.Fatalf("processOne() error = %v, want ownership loss", err)
+	}
+	select {
+	case <-handlerCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("handler was not cancelled")
+	}
+	if repository.completed != uuid.Nil || repository.failed != uuid.Nil {
+		t.Fatal("worker persisted a result after ownership loss")
+	}
+}
+
 type fakeRepository struct {
 	job       jobs.Job
 	completed uuid.UUID
 	failed    uuid.UUID
+	renewErr  error
+	renewed   chan struct{}
 }
 
 func (r *fakeRepository) ClaimNext(context.Context, jobs.ClaimJobInput) (*jobs.ClaimResult, error) {
@@ -114,5 +226,24 @@ func (r *fakeRepository) Complete(_ context.Context, id uuid.UUID, _ string, _ u
 
 func (r *fakeRepository) Fail(_ context.Context, id uuid.UUID, _ string, _ uuid.UUID, _ error) error {
 	r.failed = id
+	return nil
+}
+
+func (r *fakeRepository) RenewLease(
+	_ context.Context,
+	_ uuid.UUID,
+	_ string,
+	_ uuid.UUID,
+	_ time.Duration,
+) error {
+	if r.renewed != nil {
+		select {
+		case r.renewed <- struct{}{}:
+		default:
+		}
+	}
+	if r.renewErr != nil {
+		return r.renewErr
+	}
 	return nil
 }

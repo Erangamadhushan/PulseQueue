@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -359,6 +360,35 @@ func (r *PostgresRepository) Fail(
 	return r.finish(ctx, id, workerID, claimToken, JobStatusFailed, &failure)
 }
 
+func (r *PostgresRepository) RenewLease(
+	ctx context.Context,
+	id uuid.UUID,
+	workerID string,
+	claimToken uuid.UUID,
+	leaseDuration time.Duration,
+) error {
+	if leaseDuration <= 0 {
+		return ErrInvalidClaimInput
+	}
+
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE jobs
+		SET lease_expires_at = NOW() + ($5 * INTERVAL '1 second'),
+			updated_at = NOW()
+		WHERE id = $1
+		  AND worker_id = $2
+		  AND status = $3
+		  AND claim_token = $4
+	`, id, workerID, JobStatusRunning, claimToken, leaseDuration.Seconds())
+	if err != nil {
+		return fmt.Errorf("renew job lease: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrJobOwnershipLost
+	}
+	return nil
+}
+
 func (r *PostgresRepository) finish(
 	ctx context.Context,
 	id uuid.UUID,
@@ -377,7 +407,10 @@ func (r *PostgresRepository) finish(
 			UPDATE jobs
 			SET status = $3,
 				last_error = $4,
-				completed_at = NOW(),
+				completed_at = CASE
+					WHEN $3 = $7 THEN NOW()
+					ELSE completed_at
+				END,
 				updated_at = NOW(),
 				worker_id = NULL,
 				locked_at = NULL,
@@ -385,7 +418,7 @@ func (r *PostgresRepository) finish(
 				claim_token = NULL
 			WHERE id = $1 AND worker_id = $2 AND status = $5
 			AND claim_token = $6
-		`, id, workerID, status, lastError, JobStatusRunning, claimToken)
+		`, id, workerID, status, lastError, JobStatusRunning, claimToken, JobStatusCompleted)
 	if err != nil {
 		return fmt.Errorf("finish job: %w", err)
 	}

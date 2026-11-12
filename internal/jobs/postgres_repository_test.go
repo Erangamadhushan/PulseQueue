@@ -411,3 +411,107 @@ func TestPostgresRepositoryConcurrentClaimDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("claims = %d, want exactly one", claimed)
 	}
 }
+
+func TestPostgresRepositoryRenewLeaseChecksOwnership(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+	queue := "renew-" + uuid.NewString()
+	created, err := repo.Create(ctx, jobs.Job{
+		Queue: queue, Type: "renew_test", Payload: json.RawMessage(`{}`),
+		Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	workerID := "worker-" + uuid.NewString()
+	claim, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+		WorkerID: workerID, LeaseDuration: time.Minute, Queues: []string{queue},
+	})
+	if err != nil {
+		t.Fatalf("claim job: %v", err)
+	}
+	if claim == nil {
+		t.Fatal("expected a claimed job")
+	}
+
+	before, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get claimed job: %v", err)
+	}
+	if err := repo.RenewLease(ctx, created.ID, workerID, claim.ClaimToken, 2*time.Minute); err != nil {
+		t.Fatalf("renew lease: %v", err)
+	}
+	after, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get renewed job: %v", err)
+	}
+	if after.LeaseExpiresAt == nil || before.LeaseExpiresAt == nil ||
+		!after.LeaseExpiresAt.After(*before.LeaseExpiresAt) {
+		t.Fatalf("lease expiry did not advance: before=%v after=%v", before.LeaseExpiresAt, after.LeaseExpiresAt)
+	}
+
+	if err := repo.RenewLease(ctx, created.ID, workerID, uuid.New(), time.Minute); !errors.Is(err, jobs.ErrJobOwnershipLost) {
+		t.Fatalf("wrong token error = %v, want ErrJobOwnershipLost", err)
+	}
+}
+
+func TestPostgresRepositoryCompletionAndFailureEnforceOwnership(t *testing.T) {
+	repo := setupRepository(t)
+	ctx := context.Background()
+
+	claimJob := func(t *testing.T, queue string) (*jobs.ClaimResult, string) {
+		t.Helper()
+		created, err := repo.Create(ctx, jobs.Job{
+			Queue: queue, Type: "lifecycle_test", Payload: json.RawMessage(`{}`),
+			Status: jobs.JobStatusPending, MaxAttempts: 3, RunAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+		workerID := "worker-" + uuid.NewString()
+		claim, err := repo.ClaimNext(ctx, jobs.ClaimJobInput{
+			WorkerID: workerID, LeaseDuration: time.Minute, Queues: []string{queue},
+		})
+		if err != nil || claim == nil {
+			t.Fatalf("claim job: result=%v error=%v", claim, err)
+		}
+		if claim.Job.ID != created.ID {
+			t.Fatalf("claimed ID = %v, want %v", claim.Job.ID, created.ID)
+		}
+		return claim, workerID
+	}
+
+	completedClaim, completedWorker := claimJob(t, "complete-"+uuid.NewString())
+	if err := repo.Complete(ctx, completedClaim.Job.ID, completedWorker, uuid.New()); !errors.Is(err, jobs.ErrJobOwnershipLost) {
+		t.Fatalf("wrong completion token error = %v, want ErrJobOwnershipLost", err)
+	}
+	if err := repo.Complete(ctx, completedClaim.Job.ID, completedWorker, completedClaim.ClaimToken); err != nil {
+		t.Fatalf("complete job: %v", err)
+	}
+	completed, err := repo.GetByID(ctx, completedClaim.Job.ID)
+	if err != nil {
+		t.Fatalf("get completed job: %v", err)
+	}
+	if completed.Status != jobs.JobStatusCompleted || completed.CompletedAt == nil ||
+		completed.WorkerID != nil || completed.ClaimToken != nil {
+		t.Fatalf("completed job ownership state = %+v", completed)
+	}
+
+	failedClaim, failedWorker := claimJob(t, "fail-"+uuid.NewString())
+	if err := repo.Fail(ctx, failedClaim.Job.ID, failedWorker, uuid.New(), errors.New("stale")); !errors.Is(err, jobs.ErrJobOwnershipLost) {
+		t.Fatalf("wrong failure token error = %v, want ErrJobOwnershipLost", err)
+	}
+	if err := repo.Fail(ctx, failedClaim.Job.ID, failedWorker, failedClaim.ClaimToken, errors.New("handler failed")); err != nil {
+		t.Fatalf("fail job: %v", err)
+	}
+	failed, err := repo.GetByID(ctx, failedClaim.Job.ID)
+	if err != nil {
+		t.Fatalf("get failed job: %v", err)
+	}
+	if failed.Status != jobs.JobStatusFailed || failed.LastError == nil ||
+		*failed.LastError != "handler failed" || failed.CompletedAt != nil ||
+		failed.WorkerID != nil || failed.ClaimToken != nil {
+		t.Fatalf("failed job state = %+v", failed)
+	}
+}
